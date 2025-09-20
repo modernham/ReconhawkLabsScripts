@@ -4,15 +4,7 @@
 # Safe (no interactive dialogs). Intended to be run as root at boot.
 #Place in /usr/local/bin/
 #Place this in /root/.bashrc
-#[ -t 1 ] || exit 0
-#case $- in
-#  *i*) 
-#    # interactive shell - safe to show banners or whiptail
-#    /usr/local/bin/show-netinfo.sh >/dev/null 2>&1
-#    ;;
-#  *)
-#    ;;
-#esac
+#[ -t 1 ] || exit 0  # only interactive sessions
 
 outfile="/run/show-netinfo.txt"   # ephemeral copy we can write
 issuefile="/etc/issue"            # persistent pre-login banner file (getty)
@@ -53,8 +45,6 @@ tty_to_print="/dev/tty1"          # physical console to print to
   echo "---------------------------------------"
   echo "Commands:"
   echo " Set Static IP or DHCP: netset"
-  echo " Start a network scan:  scan"
-  echo " Share reports (web):   share"
   echo "---------------------------------------"
 } > "$outfile"
 
