@@ -1,0 +1,43 @@
+#!/usr/bin/env bash
+# share.sh - temporary Python webserver for /root/scans/output
+#Place in /usr/local/bin/
+
+set -o errexit
+set -o nounset
+set -o pipefail
+
+OUTPUT_DIR="/root/scans/output"
+PORT=8000
+DURATION=120  # seconds
+
+# Ensure directory exists
+if [ ! -d "$OUTPUT_DIR" ]; then
+    whiptail --msgbox "Output directory $OUTPUT_DIR does not exist!" 10 60
+    exit 1
+fi
+
+# Detect IP address of the main Ethernet interface
+ETH_IF=$(ip route get 1 | awk '{print $5; exit}')
+ETH_IP=$(ip -4 addr show "$ETH_IF" | grep -oP '(?<=inet\s)\d+(\.\d+){3}')
+
+# Display URL to user
+URL="http://$ETH_IP:$PORT/"
+whiptail --msgbox "After Pressing ENTER, The Python webserver will serve $OUTPUT_DIR for 2 minutes.\n\nAccess it using:\n$URL" 12 70
+
+# Start Python webserver in background
+cd "$OUTPUT_DIR"
+if command -v python3 >/dev/null 2>&1; then
+    python3 -m http.server "$PORT" >/dev/null 2>&1 &
+else
+    whiptail --msgbox "python3 not found. Install it first." 8 50
+    exit 1
+fi
+SERVER_PID=$!
+
+# Wait for the duration
+sleep "$DURATION"
+
+# Stop the server
+kill "$SERVER_PID" 2>/dev/null || true
+
+whiptail --msgbox "Python webserver stopped after $((DURATION/60)) minutes." 8 50

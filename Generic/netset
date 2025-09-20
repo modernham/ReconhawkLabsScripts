@@ -1,0 +1,176 @@
+#!/bin/bash
+# Debian Ethernet Configuration Script with whiptail UI and input validation
+# Must be run as root
+#Place in /usr/local/bin/
+
+INTERFACES_FILE="/etc/network/interfaces"
+
+# Function to get current Ethernet adapter (first non-loopback, non-virtual interface)
+get_eth_adapter() {
+    ip -o link show | awk -F': ' '/state / {print $2}' | grep -v lo | head -n1
+}
+
+# Function to get current network info in a temp file
+get_network_info() {
+    local tmpfile=$(mktemp)
+    {
+        echo "Adapter: $ETH_ADAPTER"
+        ip -4 addr show dev "$ETH_ADAPTER" | awk '/inet / {print "Current IP Address: "$2}'
+        ip route | awk '/default/ {print "Current Gateway: "$3}'
+        grep "nameserver" /etc/resolv.conf | awk '{print "Current DNS Server: "$2}'
+    } > "$tmpfile"
+    echo "$tmpfile"
+}
+
+# Function to show network info in a whiptail box
+show_network_info() {
+    local tmpfile
+    tmpfile=$(get_network_info)
+    whiptail --title "Current Network Information" --textbox "$tmpfile" 20 70
+    rm -f "$tmpfile"
+}
+
+# IPv4 validation function
+valid_ip() {
+    local ip=$1
+    local stat=1
+
+    if [[ $ip =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+        OIFS=$IFS
+        IFS='.'
+        ip=($ip)
+        IFS=$OIFS
+        [[ ${ip[0]} -le 255 && ${ip[1]} -le 255 && ${ip[2]} -le 255 && ${ip[3]} -le 255 ]]
+        stat=$?
+    fi
+    return $stat
+}
+
+# Detect adapter
+ETH_ADAPTER=$(get_eth_adapter)
+if [ -z "$ETH_ADAPTER" ]; then
+    whiptail --msgbox "No active Ethernet adapter found! Exiting." 10 60
+    exit 1
+fi
+
+show_network_info
+
+# Ask DHCP or Static
+MODE=$(whiptail --title "Network Mode" --menu "Choose network configuration mode:" 15 50 2 \
+"dhcp" "Use DHCP to automatically assign an IP" \
+"static" "Set a static IP address" 3>&1 1>&2 2>&3)
+
+IP_ADDR=""
+GATEWAY=""
+DNS=""
+
+if [[ "$MODE" == "static" ]]; then
+    # IP input with validation
+    while true; do
+        tmpfile=$(get_network_info)
+        IP_ADDR=$(whiptail --inputbox "Enter static IP (CIDR /24 will be added automatically).\n\n$(cat $tmpfile)" 15 70 3>&1 1>&2 2>&3)
+        rm -f "$tmpfile"
+        [ -z "$IP_ADDR" ] && break
+        if valid_ip "$IP_ADDR"; then
+            IP_ADDR="$IP_ADDR/24"
+            break
+        else
+            whiptail --msgbox "Invalid IP address format. Please try again." 10 60
+        fi
+    done
+
+    # Gateway input with validation
+    while true; do
+        tmpfile=$(get_network_info)
+        GATEWAY=$(whiptail --inputbox "Enter Gateway IP (leave blank to skip).\n\n$(cat $tmpfile)" 15 70 3>&1 1>&2 2>&3)
+        rm -f "$tmpfile"
+        [ -z "$GATEWAY" ] && break
+        if valid_ip "$GATEWAY"; then
+            break
+        else
+            whiptail --msgbox "Invalid Gateway IP format. Please try again." 10 60
+        fi
+    done
+
+    # DNS input with validation
+    while true; do
+        tmpfile=$(get_network_info)
+        DNS=$(whiptail --inputbox "Enter DNS Server IP (leave blank to skip).\n\n$(cat $tmpfile)" 15 70 3>&1 1>&2 2>&3)
+        rm -f "$tmpfile"
+        [ -z "$DNS" ] && break
+        if valid_ip "$DNS"; then
+            break
+        else
+            whiptail --msgbox "Invalid DNS Server IP format. Please try again." 10 60
+        fi
+    done
+fi
+
+# Backup and remove current interfaces
+if [ -f "$INTERFACES_FILE" ]; then
+    cp "$INTERFACES_FILE" "${INTERFACES_FILE}.bak.$(date +%s)"
+    rm -f "$INTERFACES_FILE"
+fi
+
+# Write new config
+cat <<EOF > "$INTERFACES_FILE"
+source /etc/network/interfaces.d/*
+auto lo
+iface lo inet loopback
+allow-hotplug $ETH_ADAPTER
+EOF
+
+if [[ "$MODE" == "dhcp" ]]; then
+    cat <<EOF >> "$INTERFACES_FILE"
+iface $ETH_ADAPTER inet dhcp
+EOF
+else
+    cat <<EOF >> "$INTERFACES_FILE"
+iface $ETH_ADAPTER inet static
+$( [ -n "$IP_ADDR" ] && echo "    address $IP_ADDR" )
+$( [ -n "$GATEWAY" ] && echo "    gateway $GATEWAY" )
+$( [ -n "$DNS" ] && echo "    dns-nameservers $DNS" )
+    dns-search reconhawklabs.com
+EOF
+fi
+
+# Restart networking
+whiptail --title "Networking" --infobox "Restarting networking service..." 8 50
+systemctl restart networking
+sleep 10
+
+# Test connectivity
+RESULTS=""
+if [ -n "$IP_ADDR" ]; then
+    ping -c 5 -W 1 "${IP_ADDR%%/*}" >/dev/null 2>&1 || RESULTS+="⚠️ Failed to ping IP: $IP_ADDR\n"
+fi
+if [ -n "$GATEWAY" ]; then
+    ping -c 5 -W 1 "$GATEWAY" >/dev/null 2>&1 || RESULTS+="⚠️ Failed to ping Gateway: $GATEWAY\n"
+fi
+if [ -n "$DNS" ]; then
+    for d in $DNS; do
+        ping -c 5 -W 1 "$d" >/dev/null 2>&1 || RESULTS+="⚠️ Failed to ping DNS: $d\n"
+    done
+fi
+
+if [ -z "$RESULTS" ]; then
+    RESULTS="✅ All connectivity tests passed."
+fi
+
+# Show final results
+FINAL_FILE=$(mktemp)
+{
+    echo "New Network Configuration"
+    echo "----------------------------"
+    echo "Adapter: $ETH_ADAPTER"
+    ip -4 addr show dev "$ETH_ADAPTER" | awk '/inet / {print "IP Address: "$2}'
+    ip route | awk '/default/ {print "Gateway: "$3}'
+    grep "nameserver" /etc/resolv.conf | awk '{print "DNS Server: "$2}'
+    echo
+    echo -e "$RESULTS"
+} > "$FINAL_FILE"
+
+whiptail --title "Final Network Configuration" --textbox "$FINAL_FILE" 20 70
+rm -f "$FINAL_FILE"
+
+exit 0

@@ -1,0 +1,162 @@
+#!/usr/bin/env bash
+# mesa-whiptail-scan-and-report.sh
+#Place in /usr/local/bin/
+
+set -o errexit
+set -o nounset
+set -o pipefail
+
+VENV_ACTIVATE="/opt/MESA-venv/bin/activate"
+SCAN_DIR="/root/scans"
+TARGETS_FILE="$SCAN_DIR/targets.txt"
+EXCLUDE_FILE="$SCAN_DIR/exclude.txt"
+LOG_DIR="$SCAN_DIR/logs"
+TMP_CONFIRM=$(mktemp)
+
+cleanup() {
+  rm -f "$TMP_CONFIRM"
+}
+trap cleanup EXIT
+
+# ------------------------
+# Helper functions
+# ------------------------
+valid_project_name() {
+  [[ "$1" =~ ^[a-z0-9]+$ ]]
+}
+
+valid_ip_or_net() {
+  local line="$1"
+  line="$(echo "$line" | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
+  [ -z "$line" ] && return 1
+  if [[ "$line" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}(/24)?$ ]]; then
+    IFS='.' read -r a b c d <<< "${line%%/*}"
+    for oct in "$a" "$b" "$c" "$d"; do
+      [[ "$oct" -ge 0 && "$oct" -le 255 ]] || return 1
+    done
+    return 0
+  fi
+  return 1
+}
+
+valid_letters_only() {
+  [[ "$1" =~ ^[A-Za-z]+$ ]]
+}
+
+valid_initials() {
+  [[ "$1" =~ ^[A-Za-z]{2}$ ]]
+}
+
+# ------------------------
+# Ensure root
+# ------------------------
+[ "$(id -u)" -ne 0 ] && { whiptail --msgbox "Please run as root." 8 40; exit 1; }
+
+# ------------------------
+# Clear previous scans
+# ------------------------
+rm -rf "${SCAN_DIR:?}/"*
+mkdir -p "$SCAN_DIR" "$LOG_DIR"
+
+# ------------------------
+# Project Name
+# ------------------------
+while true; do
+  PROJECT_NAME=$(whiptail --inputbox "Enter Project Name (lowercase letters & digits only, no spaces):" 10 60 3>&1 1>&2 2>&3)
+  [ $? -ne 0 ] && { whiptail --msgbox "Cancelled. Exiting." 8 40; exit 1; }
+  PROJECT_NAME=$(echo "$PROJECT_NAME" | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+  valid_project_name "$PROJECT_NAME" && break
+  whiptail --msgbox "Invalid project name. Only lowercase letters and digits, no spaces." 10 60
+done
+
+# ------------------------
+# Targets input
+# ------------------------
+TARGETS=""
+while true; do
+  TMP=$(whiptail --inputbox "Enter a target IP or network (leave blank to finish)\nHint: You may scan a whole network using /24 CIDR notation" 10 70 3>&1 1>&2 2>&3)
+  [ $? -ne 0 ] && { whiptail --msgbox "Cancelled. Exiting." 8 40; exit 1; }
+  TMP=$(echo "$TMP" | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+  [ -z "$TMP" ] && break
+  valid_ip_or_net "$TMP" || { whiptail --msgbox "Invalid IP or network. Use IPv4 or /24 notation." 10 60; continue; }
+  TARGETS+="$TMP"$'\n'
+done
+printf "%s" "$TARGETS" > "$TARGETS_FILE"
+
+# ------------------------
+# Excludes input
+# ------------------------
+EXCLUDES=""
+while true; do
+  TMP=$(whiptail --inputbox "Enter an IP/network to exclude (leave blank to finish)\nHint: You may use /24 CIDR for networks" 10 70 3>&1 1>&2 2>&3)
+  [ $? -ne 0 ] && { whiptail --msgbox "Cancelled. Exiting." 8 40; exit 1; }
+  TMP=$(echo "$TMP" | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+  [ -z "$TMP" ] && break
+  valid_ip_or_net "$TMP" || { whiptail --msgbox "Invalid IP or network. Use IPv4 or /24 notation." 10 60; continue; }
+  EXCLUDES+="$TMP"$'\n'
+done
+printf "%s" "$EXCLUDES" > "$EXCLUDE_FILE"
+
+# ------------------------
+# Display confirmation
+# ------------------------
+echo -e "Project Name: $PROJECT_NAME\n\nTargets:\n$TARGETS\nExcludes:\n$EXCLUDES" > "$TMP_CONFIRM"
+whiptail --title "Confirm Scan Information" --yesno "$(cat $TMP_CONFIRM)" 20 80
+[ $? -ne 0 ] && { whiptail --msgbox "Scan cancelled by user." 8 40; exit 1; }
+
+# ------------------------
+# Get Ethernet IP for SCP instructions
+# ------------------------
+ETH_IF=$(ip route get 1 | awk '{print $5; exit}')
+ETH_IP=$(ip -4 addr show "$ETH_IF" | grep -oP '(?<=inet\s)\d+(\.\d+){3}')
+echo "Detected Ethernet interface: $ETH_IF ($ETH_IP)"
+
+# ------------------------
+# Run scan in raw terminal
+# ------------------------
+ALLCHECKS_LOG="$LOG_DIR/${PROJECT_NAME}_all_checks.log"
+: > "$ALLCHECKS_LOG"
+
+clear
+echo "Starting MESA-Toolkit scan for project: $PROJECT_NAME"
+echo "Targets file: $TARGETS_FILE"
+echo "Excludes file: $EXCLUDE_FILE"
+echo "Log file: $ALLCHECKS_LOG"
+echo "----------------------------------------"
+echo "Scan is running. Do NOT exit. Output will appear below."
+echo "----------------------------------------"
+
+bash -c "source '$VENV_ACTIVATE' && cd '$SCAN_DIR' && MESA-Toolkit -o all_checks -p '$PROJECT_NAME' -i '$TARGETS_FILE' -e '$EXCLUDE_FILE'" | tee "$ALLCHECKS_LOG"
+
+# ------------------------
+# Post-scan: Customer Info
+# ------------------------
+while true; do
+    CUSTOMER_NAME=$(whiptail --inputbox "Enter Customer Name (letters only, no spaces):" 10 60 3>&1 1>&2 2>&3)
+    [ $? -ne 0 ] && { whiptail --msgbox "Cancelled. Exiting." 8 40; exit 1; }
+    CUSTOMER_NAME=$(echo "$CUSTOMER_NAME" | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    valid_letters_only "$CUSTOMER_NAME" && break
+    whiptail --msgbox "Invalid Customer Name. Letters only, no spaces." 10 60
+done
+
+while true; do
+    CUSTOMER_INITIALS=$(whiptail --inputbox "Enter Customer Initials (2 letters only):" 10 60 3>&1 1>&2 2>&3)
+    [ $? -ne 0 ] && { whiptail --msgbox "Cancelled. Exiting." 8 40; exit 1; }
+    CUSTOMER_INITIALS=$(echo "$CUSTOMER_INITIALS" | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
+    valid_initials "$CUSTOMER_INITIALS" && break
+    whiptail --msgbox "Invalid initials. Must be exactly 2 letters." 10 60
+done
+
+# ------------------------
+# Generate report
+# ------------------------
+REPORT_DIR="$SCAN_DIR/output/$PROJECT_NAME/customer_deliverable"
+REPORT_FILE="$REPORT_DIR/${CUSTOMER_INITIALS}-Customer-Report.zip"
+mkdir -p "$REPORT_DIR"
+
+bash -c "source '$VENV_ACTIVATE' && cd '$SCAN_DIR' && MESA-Toolkit -o report_generator -p '$PROJECT_NAME' -cn '$CUSTOMER_NAME' -ci '$CUSTOMER_INITIALS'"
+
+# ------------------------
+# Show completion message
+# ------------------------
+whiptail --msgbox "Report generated successfully!\n\nPath:\n$REPORT_FILE\n\nYou can download it to your computer using:\nscp root@$ETH_IP:$REPORT_DIR/* , or use the share command." 15 80
