@@ -70,6 +70,17 @@ show_network_info() {
     fi
 }
 
+warn_about_cleanup() {
+    if whiptail --title "Warning - Data Deletion" --yesno "WARNING: This script will delete all contents in /root/scans directory.\n\nAll existing scan files and data in /root/scans will be permanently removed.\n\nDo you want to continue?" 12 60; then
+        log_message "User acknowledged cleanup warning and chose to continue"
+        return 0
+    else
+        log_message "User declined cleanup warning and chose to exit"
+        whiptail --title "Exit" --msgbox "Script cancelled by user. No files were deleted." 8 50
+        exit 1
+    fi
+}
+
 cleanup_scans() {
     log_message "Cleaning up /root/scans directory"
     rm -rf /root/scans/*
@@ -132,19 +143,109 @@ collect_ip_addresses() {
 run_discovery_scan() {
     local network_range="$1"
 
-    whiptail --title "Discovery Scan" --msgbox "Discovery scan will start after you press Enter.\nThis may take 10-20 minutes." 8 50
+    whiptail --title "Discovery Scan" --msgbox "Discovery scan will start after you press Enter.\nThis may take 15-25 minutes (includes nmap and netdiscover scans)." 8 50
 
     log_message "Starting discovery scan for range: $network_range"
 
     clear
-    echo "Running discovery scan on $network_range..."
+    echo "Running nmap discovery scan on $network_range..."
     echo "This may take 10-20 minutes..."
 
     nmap -sn -PR -PS21,22,23,25,110,143,80,445,139,8081,389,636,8080,443,3389,5985 -PU53,123,161,137,5353,1900 --max-retries 3 --host-timeout 60s -T2 "$network_range" -oG /root/scans/discovery.gnmap
 
     awk '/Up$/{print $2}' /root/scans/discovery.gnmap > /root/scans/nmap-live-hosts.txt
 
+    log_message "Nmap discovery scan completed"
+
+    echo "Running netdiscover scan (3 minutes)..."
+    log_message "Starting netdiscover scan"
+
+    cd /root/scans
+    timeout 180 netdiscover -P -N > /root/scans/netdiscover-hosts.raw 2>/dev/null || true
+
+    if [[ -f /root/scans/netdiscover-hosts.raw ]]; then
+        awk '{print $1}' /root/scans/netdiscover-hosts.raw | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' > /root/scans/netdiscover-hosts.txt
+
+        if [[ -s /root/scans/netdiscover-hosts.txt ]]; then
+            cat /root/scans/nmap-live-hosts.txt /root/scans/netdiscover-hosts.txt | sort -u > /root/scans/merged-hosts.txt
+            mv /root/scans/merged-hosts.txt /root/scans/nmap-live-hosts.txt
+            log_message "Netdiscover results merged with nmap results"
+        else
+            log_message "No valid IPs found in netdiscover output"
+        fi
+    else
+        log_message "Netdiscover output file not created"
+    fi
+
     log_message "Discovery scan completed"
+}
+
+modify_host_list() {
+    while true; do
+        local host_list=$(cat /root/scans/nmap-live-hosts.txt)
+        local host_count=$(wc -l < /root/scans/nmap-live-hosts.txt)
+
+        if [[ $host_count -eq 0 ]]; then
+            whiptail --title "No Hosts" --msgbox "No hosts in the list. Please add at least one host." 8 50
+            continue
+        fi
+
+        local choice=$(whiptail --title "Modify Host List ($host_count hosts)" --menu "Current hosts:\n\n$host_list\n\nChoose an action:" 20 70 4 \
+            "1" "Add IP address" \
+            "2" "Remove IP address" \
+            "3" "Continue with current list" \
+            "4" "Exit script" 3>&1 1>&2 2>&3)
+
+        case $choice in
+            1)
+                local new_ip=$(whiptail --title "Add IP Address" --inputbox "Enter IP address to add:" 8 50 3>&1 1>&2 2>&3)
+                if [[ $? -eq 0 && -n "$new_ip" ]]; then
+                    if validate_ip "$new_ip"; then
+                        if ! grep -q "^$new_ip$" /root/scans/nmap-live-hosts.txt; then
+                            echo "$new_ip" >> /root/scans/nmap-live-hosts.txt
+                            log_message "User added IP: $new_ip"
+                            whiptail --title "Success" --msgbox "IP address $new_ip added to the list." 8 50
+                        else
+                            whiptail --title "Duplicate" --msgbox "IP address $new_ip is already in the list." 8 50
+                        fi
+                    else
+                        whiptail --title "Invalid IP" --msgbox "Invalid IP address format. Please try again." 8 50
+                    fi
+                fi
+                ;;
+            2)
+                if [[ $host_count -eq 1 ]]; then
+                    whiptail --title "Cannot Remove" --msgbox "Cannot remove the last IP address. At least one host is required." 8 50
+                    continue
+                fi
+
+                local ip_to_remove=$(whiptail --title "Remove IP Address" --inputbox "Enter IP address to remove:" 8 50 3>&1 1>&2 2>&3)
+                if [[ $? -eq 0 && -n "$ip_to_remove" ]]; then
+                    if grep -q "^$ip_to_remove$" /root/scans/nmap-live-hosts.txt; then
+                        grep -v "^$ip_to_remove$" /root/scans/nmap-live-hosts.txt > /root/scans/nmap-live-hosts.tmp
+                        mv /root/scans/nmap-live-hosts.tmp /root/scans/nmap-live-hosts.txt
+                        log_message "User removed IP: $ip_to_remove"
+                        whiptail --title "Success" --msgbox "IP address $ip_to_remove removed from the list." 8 50
+                    else
+                        whiptail --title "Not Found" --msgbox "IP address $ip_to_remove not found in the list." 8 50
+                    fi
+                fi
+                ;;
+            3)
+                log_message "User confirmed modified host list"
+                return 0
+                ;;
+            4)
+                log_message "User chose to exit from host modification"
+                whiptail --title "Exit" --msgbox "Exiting script." 8 50
+                exit 1
+                ;;
+            *)
+                whiptail --title "Exit" --msgbox "Exiting script." 8 50
+                exit 1
+                ;;
+        esac
+    done
 }
 
 display_and_confirm_hosts() {
@@ -156,14 +257,11 @@ display_and_confirm_hosts() {
         exit 1
     fi
 
-    if whiptail --title "Live Hosts ($host_count found)" --yesno "Found the following live hosts:\n\n$host_list\n\nIs this list correct?" 20 60 --scrolltext; then
-        log_message "User confirmed host list"
-        return 0
-    else
-        log_message "User rejected host list"
-        whiptail --title "Exit" --msgbox "Host list confirmation failed. Exiting script." 8 50
-        exit 1
+    if whiptail --title "Live Hosts ($host_count found)" --yesno "Found the following live hosts:\n\n$host_list\n\nWould you like to modify this list before proceeding?" 20 60 --scrolltext; then
+        modify_host_list
     fi
+
+    log_message "User confirmed final host list"
 }
 
 run_deep_scan() {
@@ -226,6 +324,8 @@ main() {
     log_message "Network Security Assessment Tool started"
 
     show_network_info
+
+    warn_about_cleanup
 
     cleanup_scans
 
