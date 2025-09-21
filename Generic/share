@@ -6,7 +6,7 @@ set -o errexit
 set -o nounset
 set -o pipefail
 
-OUTPUT_DIR="/root/scans/output"
+OUTPUT_DIR="/root/report"
 PORT=8000
 DURATION=120  # seconds
 

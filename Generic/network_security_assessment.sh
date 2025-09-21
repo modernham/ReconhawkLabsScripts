@@ -1,0 +1,261 @@
+#!/bin/bash
+
+set -e
+
+BACKTITLE="Network Security Assessment Tool"
+LOGFILE="/tmp/network_assessment.log"
+
+log_message() {
+    echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "$LOGFILE"
+}
+
+get_network_info() {
+    local ip=$(ip route get 8.8.8.8 2>/dev/null | awk '{print $7; exit}')
+    local gateway=$(ip route | grep default | awk '{print $3; exit}')
+    local dns=$(grep -v '^#' /etc/resolv.conf | grep nameserver | awk '{print $2}' | tr '\n' ' ')
+
+    echo "IP: $ip"
+    echo "Gateway: $gateway"
+    echo "DNS: $dns"
+}
+
+validate_cidr() {
+    local cidr="$1"
+    if [[ $cidr =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}$ ]]; then
+        local ip_part="${cidr%/*}"
+        local subnet_part="${cidr#*/}"
+
+        IFS='.' read -ra ADDR <<< "$ip_part"
+        for i in "${ADDR[@]}"; do
+            if [[ $i -lt 0 || $i -gt 255 ]]; then
+                return 1
+            fi
+        done
+
+        if [[ $subnet_part -lt 0 || $subnet_part -gt 32 ]]; then
+            return 1
+        fi
+
+        return 0
+    else
+        return 1
+    fi
+}
+
+validate_ip() {
+    local ip="$1"
+    if [[ $ip =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+        IFS='.' read -ra ADDR <<< "$ip"
+        for i in "${ADDR[@]}"; do
+            if [[ $i -lt 0 || $i -gt 255 ]]; then
+                return 1
+            fi
+        done
+        return 0
+    else
+        return 1
+    fi
+}
+
+show_network_info() {
+    local network_info=$(get_network_info)
+
+    if whiptail --title "Network Information" --yesno "Current network configuration:\n\n$network_info\n\nIs this information correct?" 12 60; then
+        log_message "User verified network information"
+        return 0
+    else
+        log_message "User rejected network information"
+        whiptail --title "Exit" --msgbox "Network information verification failed. Exiting script." 8 50
+        exit 1
+    fi
+}
+
+cleanup_scans() {
+    log_message "Cleaning up /root/scans directory"
+    rm -rf /root/scans/*
+    mkdir -p /root/scans
+    mkdir -p /root/report
+}
+
+get_scan_method() {
+    if whiptail --title "Scan Method" --yesno "Would you like to conduct a network discovery scan to find live hosts?\n\nSelect 'Yes' for network discovery scan\nSelect 'No' to manually enter IP addresses" 10 60; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+get_network_range() {
+    local cidr_range=""
+
+    while true; do
+        cidr_range=$(whiptail --title "Network Range" --inputbox "Enter the network range in CIDR notation:\n\nExample: 10.10.10.0/24" 10 50 3>&1 1>&2 2>&3)
+
+        if [[ $? -ne 0 ]]; then
+            exit 1
+        fi
+
+        if validate_cidr "$cidr_range"; then
+            echo "$cidr_range"
+            return 0
+        else
+            whiptail --title "Invalid Format" --msgbox "Invalid CIDR format. Please try again.\n\nExample: 10.10.10.0/24" 8 50
+        fi
+    done
+}
+
+collect_ip_addresses() {
+    local ip_list=""
+    local ip_address=""
+
+    while true; do
+        ip_address=$(whiptail --title "IP Address Entry" --inputbox "Enter an IP address (leave blank and press Enter when done):" 8 50 3>&1 1>&2 2>&3)
+
+        if [[ $? -ne 0 ]]; then
+            exit 1
+        fi
+
+        if [[ -z "$ip_address" ]]; then
+            break
+        fi
+
+        if validate_ip "$ip_address"; then
+            ip_list="$ip_list$ip_address\n"
+        else
+            whiptail --title "Invalid IP" --msgbox "Invalid IP address format. Please try again." 8 50
+        fi
+    done
+
+    echo -e "$ip_list" | grep -v '^$' > /root/scans/nmap-live-hosts.txt
+}
+
+run_discovery_scan() {
+    local network_range="$1"
+
+    whiptail --title "Discovery Scan" --msgbox "Discovery scan will start after you press Enter.\nThis may take 10-20 minutes." 8 50
+
+    log_message "Starting discovery scan for range: $network_range"
+
+    clear
+    echo "Running discovery scan on $network_range..."
+    echo "This may take 10-20 minutes..."
+
+    nmap -sn -PR -PS21,22,23,25,110,143,80,445,139,8081,389,636,8080,443,3389,5985 -PU53,123,161,137,5353,1900 --max-retries 3 --host-timeout 60s -T2 "$network_range" -oG /root/scans/discovery.gnmap
+
+    awk '/Up$/{print $2}' /root/scans/discovery.gnmap > /root/scans/nmap-live-hosts.txt
+
+    log_message "Discovery scan completed"
+}
+
+display_and_confirm_hosts() {
+    local host_list=$(cat /root/scans/nmap-live-hosts.txt)
+    local host_count=$(wc -l < /root/scans/nmap-live-hosts.txt)
+
+    if [[ $host_count -eq 0 ]]; then
+        whiptail --title "No Hosts Found" --msgbox "No live hosts were found. Exiting script." 8 50
+        exit 1
+    fi
+
+    if whiptail --title "Live Hosts ($host_count found)" --yesno "Found the following live hosts:\n\n$host_list\n\nIs this list correct?" 20 60 --scrolltext; then
+        log_message "User confirmed host list"
+        return 0
+    else
+        log_message "User rejected host list"
+        whiptail --title "Exit" --msgbox "Host list confirmation failed. Exiting script." 8 50
+        exit 1
+    fi
+}
+
+run_deep_scan() {
+    log_message "Starting deep scan"
+
+    clear
+    echo "Starting comprehensive port and vulnerability scan..."
+    echo "This will take a significant amount of time..."
+
+    nmap -sS -sU -p T:1-65535,U:53,161,137,5353 -T3 --max-retries 3 --host-timeout 3600s --script "default or vuln" --script-timeout 900s -Pn -sV -O -iL /root/scans/nmap-live-hosts.txt -oA /root/scans/nmap-deep-scan
+
+    log_message "Deep scan completed"
+}
+
+generate_html_report() {
+    log_message "Generating HTML report"
+
+    if [[ -f /root/scans/nmap-deep-scan.xml ]]; then
+        xsltproc /root/scans/nmap-deep-scan.xml -o /root/scans/nmap-deep-scan.html
+    else
+        whiptail --title "Error" --msgbox "XML scan results not found. Cannot generate HTML report." 8 50
+        exit 1
+    fi
+}
+
+create_encrypted_report() {
+    whiptail --title "Report Encryption" --msgbox "You will now be prompted for an encryption password for the report." 8 60
+
+    clear
+    echo "Creating encrypted report archive..."
+    echo "You will be prompted for a password:"
+
+    zip -r -e /root/report/nmap_report.zip /root/scans/*
+
+    log_message "Encrypted report created"
+}
+
+share_report() {
+    local ip=$(ip route get 8.8.8.8 2>/dev/null | awk '{print $7; exit}')
+
+    whiptail --title "Report Sharing" --msgbox "The report will be shared via webserver at:\nhttp://$ip:8000\n\nPress Enter to start the web server for 2 minutes." 10 60
+
+    log_message "Starting web server for report sharing"
+
+    clear
+    echo "Starting web server at http://$ip:8000"
+    echo "Press Ctrl+C to stop the server"
+
+    cd /root/report
+    timeout 120 python3 -m http.server 8000 || true
+
+    log_message "Web server session completed"
+}
+
+scan_complete_menu() {
+    whiptail --title "Scan Complete" --msgbox "Network security assessment scan is complete!\n\nThe scan results are ready to share." 8 60
+}
+
+main() {
+    log_message "Network Security Assessment Tool started"
+
+    show_network_info
+
+    cleanup_scans
+
+    if get_scan_method; then
+        network_range=$(get_network_range)
+        run_discovery_scan "$network_range"
+    else
+        collect_ip_addresses
+    fi
+
+    display_and_confirm_hosts
+
+    run_deep_scan
+
+    scan_complete_menu
+
+    generate_html_report
+
+    create_encrypted_report
+
+    share_report
+
+    log_message "Network Security Assessment Tool completed successfully"
+
+    whiptail --title "Complete" --msgbox "Network security assessment completed successfully!" 8 50
+}
+
+if [[ $EUID -ne 0 ]]; then
+    echo "This script must be run as root"
+    exit 1
+fi
+
+main "$@"
