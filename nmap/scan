@@ -71,7 +71,7 @@ show_network_info() {
 }
 
 warn_about_cleanup() {
-    if whiptail --title "Warning - Data Deletion" --yesno "WARNING: This script will delete all contents in /root/scans directory.\n\nAll existing scan files and data in /root/scans will be permanently removed.\n\nDo you want to continue?" 12 60; then
+    if whiptail --title "Warning - Data Deletion" --yesno "WARNING: This script will delete all contents in scans and report directory.\n\nAll existing scan files and data in scans and reports will be permanently removed.\n\nDo you want to continue?" 12 60; then
         log_message "User acknowledged cleanup warning and chose to continue"
         return 0
     else
@@ -82,8 +82,9 @@ warn_about_cleanup() {
 }
 
 cleanup_scans() {
-    log_message "Cleaning up /root/scans directory"
+    log_message "Cleaning up /root/scans and /root/report directory"
     rm -rf /root/scans/*
+    rm -rf /root/report/*
     mkdir -p /root/scans
     mkdir -p /root/report
 }
