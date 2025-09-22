@@ -1,162 +1,410 @@
-#!/usr/bin/env bash
-# mesa-whiptail-scan-and-report.sh
-#Place in /usr/local/bin/
+#!/bin/bash
 
-set -o errexit
-set -o nounset
-set -o pipefail
+# MESA-TOOLKIT Security Assessment Script
+# Interactive script with whiptail menus for conducting security assessments
 
-VENV_ACTIVATE="/opt/MESA-venv/bin/activate"
-SCAN_DIR="/root/scans"
-TARGETS_FILE="$SCAN_DIR/targets.txt"
-EXCLUDE_FILE="$SCAN_DIR/exclude.txt"
-LOG_DIR="$SCAN_DIR/logs"
-TMP_CONFIRM=$(mktemp)
+set -e
 
-cleanup() {
-  rm -f "$TMP_CONFIRM"
-}
-trap cleanup EXIT
+# Global variables
+PROJECT_NAME=""
+CUSTOMER_NAME=""
+CUSTOMER_INITIALS=""
+TARGET_NETWORK=""
+EXCLUDED_IPS=()
 
-# ------------------------
-# Helper functions
-# ------------------------
-valid_project_name() {
-  [[ "$1" =~ ^[a-z0-9]+$ ]]
+# Function to get current network information
+get_network_info() {
+    local ip=$(ip route get 8.8.8.8 | awk -F"src " 'NR==1{split($2,a," ");print a[1]}')
+    local gateway=$(ip route | awk '/default/ { print $3 }' | head -n1)
+    local dns=$(cat /etc/resolv.conf | grep nameserver | head -n1 | awk '{print $2}')
+
+    echo "IP: $ip"
+    echo "Gateway: $gateway"
+    echo "DNS: $dns"
 }
 
-valid_ip_or_net() {
-  local line="$1"
-  line="$(echo "$line" | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')"
-  [ -z "$line" ] && return 1
-  if [[ "$line" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}(/24)?$ ]]; then
-    IFS='.' read -r a b c d <<< "${line%%/*}"
-    for oct in "$a" "$b" "$c" "$d"; do
-      [[ "$oct" -ge 0 && "$oct" -le 255 ]] || return 1
+# Function to verify network configuration
+verify_network() {
+    local network_info=$(get_network_info)
+
+    if whiptail --title "Network Verification" --yesno "Please verify your current network configuration:\n\n$network_info\n\nIs this information correct?" 15 60; then
+        return 0
+    else
+        whiptail --title "Exiting" --msgbox "Network verification failed. Exiting script." 8 50
+        exit 0
+    fi
+}
+
+# Function to warn about data removal
+warn_data_removal() {
+    if whiptail --title "WARNING - Data Removal" --yesno "WARNING: All previous scans and reports will be removed if you continue.\n\nContents of /root/scans and /root/report will be deleted.\n\nDo you want to continue?" 12 70; then
+        return 0
+    else
+        whiptail --title "Exiting" --msgbox "Operation cancelled by user. Exiting script." 8 50
+        exit 0
+    fi
+}
+
+# Function to cleanup directories
+cleanup_directories() {
+    # Create directories if they don't exist, otherwise clean them
+    if [ -d "/root/scans" ]; then
+        rm -rf /root/scans/*
+    else
+        mkdir -p /root/scans
+    fi
+
+    if [ -d "/root/report" ]; then
+        rm -rf /root/report/*
+    else
+        mkdir -p /root/report
+    fi
+}
+
+# Function to validate project name (lowercase letters only, no spaces)
+validate_project_name() {
+    local name="$1"
+    if [[ "$name" =~ ^[a-z]+$ ]]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+# Function to get project name
+get_project_name() {
+    while true; do
+        PROJECT_NAME=$(whiptail --title "Project Name" --inputbox "Enter project name (lowercase letters only, no spaces):" 10 60 3>&1 1>&2 2>&3)
+
+        if [ $? -ne 0 ]; then
+            whiptail --title "Exiting" --msgbox "Operation cancelled. Exiting script." 8 50
+            exit 0
+        fi
+
+        if validate_project_name "$PROJECT_NAME"; then
+            break
+        else
+            whiptail --title "Invalid Input" --msgbox "Invalid project name. Please use lowercase letters only, no spaces." 8 60
+        fi
     done
-    return 0
-  fi
-  return 1
 }
 
-valid_letters_only() {
-  [[ "$1" =~ ^[A-Za-z]+$ ]]
+# Function to validate customer name (no capitals, no spaces, letters only)
+validate_customer_name() {
+    local name="$1"
+    if [[ "$name" =~ ^[a-z]+$ ]]; then
+        return 0
+    else
+        return 1
+    fi
 }
 
-valid_initials() {
-  [[ "$1" =~ ^[A-Za-z]{2}$ ]]
+# Function to get customer name
+get_customer_name() {
+    while true; do
+        CUSTOMER_NAME=$(whiptail --title "Customer Name" --inputbox "Enter customer name (lowercase letters only, no spaces):" 10 60 3>&1 1>&2 2>&3)
+
+        if [ $? -ne 0 ]; then
+            whiptail --title "Exiting" --msgbox "Operation cancelled. Exiting script." 8 50
+            exit 0
+        fi
+
+        if validate_customer_name "$CUSTOMER_NAME"; then
+            break
+        else
+            whiptail --title "Invalid Input" --msgbox "Invalid customer name. Please use lowercase letters only, no spaces." 8 60
+        fi
+    done
 }
 
-# ------------------------
-# Ensure root
-# ------------------------
-[ "$(id -u)" -ne 0 ] && { whiptail --msgbox "Please run as root." 8 40; exit 1; }
+# Function to validate customer initials (2 letters only)
+validate_customer_initials() {
+    local initials="$1"
+    if [[ "$initials" =~ ^[a-zA-Z]{2}$ ]]; then
+        return 0
+    else
+        return 1
+    fi
+}
 
-# ------------------------
-# Clear previous scans
-# ------------------------
-rm -rf "${SCAN_DIR:?}/"*
-mkdir -p "$SCAN_DIR" "$LOG_DIR"
+# Function to get customer initials
+get_customer_initials() {
+    while true; do
+        CUSTOMER_INITIALS=$(whiptail --title "Customer Initials" --inputbox "Enter customer initials (2 letters only):" 10 60 3>&1 1>&2 2>&3)
 
-# ------------------------
-# Project Name
-# ------------------------
-while true; do
-  PROJECT_NAME=$(whiptail --inputbox "Enter Project Name (lowercase letters & digits only, no spaces):" 10 60 3>&1 1>&2 2>&3)
-  [ $? -ne 0 ] && { whiptail --msgbox "Cancelled. Exiting." 8 40; exit 1; }
-  PROJECT_NAME=$(echo "$PROJECT_NAME" | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-  valid_project_name "$PROJECT_NAME" && break
-  whiptail --msgbox "Invalid project name. Only lowercase letters and digits, no spaces." 10 60
-done
+        if [ $? -ne 0 ]; then
+            whiptail --title "Exiting" --msgbox "Operation cancelled. Exiting script." 8 50
+            exit 0
+        fi
 
-# ------------------------
-# Targets input
-# ------------------------
-TARGETS=""
-while true; do
-  TMP=$(whiptail --inputbox "Enter a target IP or network (leave blank to finish)\nHint: You may scan a whole network using /24 CIDR notation" 10 70 3>&1 1>&2 2>&3)
-  [ $? -ne 0 ] && { whiptail --msgbox "Cancelled. Exiting." 8 40; exit 1; }
-  TMP=$(echo "$TMP" | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-  [ -z "$TMP" ] && break
-  valid_ip_or_net "$TMP" || { whiptail --msgbox "Invalid IP or network. Use IPv4 or /24 notation." 10 60; continue; }
-  TARGETS+="$TMP"$'\n'
-done
-printf "%s" "$TARGETS" > "$TARGETS_FILE"
+        if validate_customer_initials "$CUSTOMER_INITIALS"; then
+            break
+        else
+            whiptail --title "Invalid Input" --msgbox "Invalid initials. Please enter exactly 2 letters." 8 60
+        fi
+    done
+}
 
-# ------------------------
-# Excludes input
-# ------------------------
-EXCLUDES=""
-while true; do
-  TMP=$(whiptail --inputbox "Enter an IP/network to exclude (leave blank to finish)\nHint: You may use /24 CIDR for networks" 10 70 3>&1 1>&2 2>&3)
-  [ $? -ne 0 ] && { whiptail --msgbox "Cancelled. Exiting." 8 40; exit 1; }
-  TMP=$(echo "$TMP" | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-  [ -z "$TMP" ] && break
-  valid_ip_or_net "$TMP" || { whiptail --msgbox "Invalid IP or network. Use IPv4 or /24 notation." 10 60; continue; }
-  EXCLUDES+="$TMP"$'\n'
-done
-printf "%s" "$EXCLUDES" > "$EXCLUDE_FILE"
+# Function to validate CIDR notation
+validate_cidr() {
+    local cidr="$1"
+    if [[ "$cidr" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}$ ]]; then
+        # Basic format check passed, now validate IP octets and subnet mask
+        local ip_part="${cidr%/*}"
+        local mask_part="${cidr#*/}"
 
-# ------------------------
-# Display confirmation
-# ------------------------
-echo -e "Project Name: $PROJECT_NAME\n\nTargets:\n$TARGETS\nExcludes:\n$EXCLUDES" > "$TMP_CONFIRM"
-whiptail --title "Confirm Scan Information" --yesno "$(cat $TMP_CONFIRM)" 20 80
-[ $? -ne 0 ] && { whiptail --msgbox "Scan cancelled by user." 8 40; exit 1; }
+        # Validate IP octets (0-255)
+        IFS='.' read -ra OCTETS <<< "$ip_part"
+        for octet in "${OCTETS[@]}"; do
+            if [ "$octet" -gt 255 ] || [ "$octet" -lt 0 ]; then
+                return 1
+            fi
+        done
 
-# ------------------------
-# Get Ethernet IP for SCP instructions
-# ------------------------
-ETH_IF=$(ip route get 1 | awk '{print $5; exit}')
-ETH_IP=$(ip -4 addr show "$ETH_IF" | grep -oP '(?<=inet\s)\d+(\.\d+){3}')
-echo "Detected Ethernet interface: $ETH_IF ($ETH_IP)"
+        # Validate subnet mask (0-32)
+        if [ "$mask_part" -gt 32 ] || [ "$mask_part" -lt 0 ]; then
+            return 1
+        fi
 
-# ------------------------
-# Run scan in raw terminal
-# ------------------------
-ALLCHECKS_LOG="$LOG_DIR/${PROJECT_NAME}_all_checks.log"
-: > "$ALLCHECKS_LOG"
+        return 0
+    else
+        return 1
+    fi
+}
 
-clear
-echo "Starting MESA-Toolkit scan for project: $PROJECT_NAME"
-echo "Targets file: $TARGETS_FILE"
-echo "Excludes file: $EXCLUDE_FILE"
-echo "Log file: $ALLCHECKS_LOG"
-echo "----------------------------------------"
-echo "Scan is running. Do NOT exit. Output will appear below."
-echo "----------------------------------------"
+# Function to get target network
+get_target_network() {
+    while true; do
+        TARGET_NETWORK=$(whiptail --title "Target Network" --inputbox "Enter network to scan in CIDR notation (example: 10.10.10.0/24):" 10 70 3>&1 1>&2 2>&3)
 
-bash -c "source '$VENV_ACTIVATE' && cd '$SCAN_DIR' && MESA-Toolkit -o all_checks -p '$PROJECT_NAME' -i '$TARGETS_FILE' -e '$EXCLUDE_FILE'" | tee "$ALLCHECKS_LOG"
+        if [ $? -ne 0 ]; then
+            whiptail --title "Exiting" --msgbox "Operation cancelled. Exiting script." 8 50
+            exit 0
+        fi
 
-# ------------------------
-# Post-scan: Customer Info
-# ------------------------
-while true; do
-    CUSTOMER_NAME=$(whiptail --inputbox "Enter Customer Name (letters only, no spaces):" 10 60 3>&1 1>&2 2>&3)
-    [ $? -ne 0 ] && { whiptail --msgbox "Cancelled. Exiting." 8 40; exit 1; }
-    CUSTOMER_NAME=$(echo "$CUSTOMER_NAME" | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-    valid_letters_only "$CUSTOMER_NAME" && break
-    whiptail --msgbox "Invalid Customer Name. Letters only, no spaces." 10 60
-done
+        if validate_cidr "$TARGET_NETWORK"; then
+            break
+        else
+            whiptail --title "Invalid Input" --msgbox "Invalid CIDR notation. Please enter a valid network (e.g., 10.10.10.0/24)." 8 70
+        fi
+    done
+}
 
-while true; do
-    CUSTOMER_INITIALS=$(whiptail --inputbox "Enter Customer Initials (2 letters only):" 10 60 3>&1 1>&2 2>&3)
-    [ $? -ne 0 ] && { whiptail --msgbox "Cancelled. Exiting." 8 40; exit 1; }
-    CUSTOMER_INITIALS=$(echo "$CUSTOMER_INITIALS" | tr -d '\r' | sed 's/^[[:space:]]*//;s/[[:space:]]*$//')
-    valid_initials "$CUSTOMER_INITIALS" && break
-    whiptail --msgbox "Invalid initials. Must be exactly 2 letters." 10 60
-done
+# Function to validate IP address
+validate_ip() {
+    local ip="$1"
+    if [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+        IFS='.' read -ra OCTETS <<< "$ip"
+        for octet in "${OCTETS[@]}"; do
+            if [ "$octet" -gt 255 ] || [ "$octet" -lt 0 ]; then
+                return 1
+            fi
+        done
+        return 0
+    else
+        return 1
+    fi
+}
 
-# ------------------------
-# Generate report
-# ------------------------
-REPORT_DIR="$SCAN_DIR/output/$PROJECT_NAME/customer_deliverable"
-REPORT_FILE="$REPORT_DIR/${CUSTOMER_INITIALS}-Customer-Report.zip"
-mkdir -p "$REPORT_DIR"
+# Function to get excluded IPs
+get_excluded_ips() {
+    EXCLUDED_IPS=()
 
-bash -c "source '$VENV_ACTIVATE' && cd '$SCAN_DIR' && MESA-Toolkit -o report_generator -p '$PROJECT_NAME' -cn '$CUSTOMER_NAME' -ci '$CUSTOMER_INITIALS'"
+    while true; do
+        local excluded_ip=$(whiptail --title "Excluded IPs" --inputbox "Enter IP address to exclude (or leave blank and press Enter to finish):" 10 70 3>&1 1>&2 2>&3)
 
-# ------------------------
-# Show completion message
-# ------------------------
-whiptail --msgbox "Report generated successfully!\n\nPath:\n$REPORT_FILE\n\nYou can download it to your computer using:\nscp root@$ETH_IP:$REPORT_DIR/* , or use the share command." 15 80
+        if [ $? -ne 0 ]; then
+            whiptail --title "Exiting" --msgbox "Operation cancelled. Exiting script." 8 50
+            exit 0
+        fi
+
+        # If input is empty, break the loop
+        if [ -z "$excluded_ip" ]; then
+            break
+        fi
+
+        if validate_ip "$excluded_ip"; then
+            EXCLUDED_IPS+=("$excluded_ip")
+            whiptail --title "IP Added" --msgbox "IP $excluded_ip added to exclusion list." 8 50
+        else
+            whiptail --title "Invalid IP" --msgbox "Invalid IP address format. Please try again." 8 50
+        fi
+    done
+}
+
+# Function to save configuration files
+save_config_files() {
+    # Save target network to targets.txt
+    echo "$TARGET_NETWORK" > /root/scans/targets.txt
+
+    # Save excluded IPs to exclude.txt
+    printf "%s\n" "${EXCLUDED_IPS[@]}" > /root/scans/exclude.txt
+}
+
+# Function to display confirmation
+display_confirmation() {
+    local excluded_list=""
+    if [ ${#EXCLUDED_IPS[@]} -eq 0 ]; then
+        excluded_list="None"
+    else
+        excluded_list=$(printf "%s\n" "${EXCLUDED_IPS[@]}")
+    fi
+
+    local confirmation_text="Please confirm the following information:
+
+Project Name: $PROJECT_NAME
+Customer Name: $CUSTOMER_NAME
+Customer Initials: $CUSTOMER_INITIALS
+Target Network: $TARGET_NETWORK
+Excluded IPs:
+$excluded_list
+
+Is this information correct?"
+
+    if whiptail --title "Confirmation" --yesno "$confirmation_text" 20 70; then
+        return 0
+    else
+        whiptail --title "Exiting" --msgbox "Information not confirmed. Exiting script." 8 50
+        exit 0
+    fi
+}
+
+# Function to run MESA scan
+run_mesa_scan() {
+    whiptail --title "Starting Scan" --msgbox "Starting MESA-TOOLKIT scan. This may take some time..." 8 60
+
+    # Show terminal and run scan
+    clear
+    echo "Running MESA-TOOLKIT scan..."
+    echo "Project: $PROJECT_NAME"
+    echo "Target: $TARGET_NETWORK"
+    echo "================================="
+
+    bash -c "source /opt/MESA-venv/bin/activate && cd /root/scans && MESA-Toolkit -o all_checks -p '$PROJECT_NAME' -i /root/scans/targets.txt -e /root/scans/exclude.txt" | tee /root/scans/log.txt
+
+    echo "================================="
+    echo "Scan completed!"
+    read -p "Press Enter to continue..."
+}
+
+# Function to generate report
+generate_report() {
+    whiptail --title "Report Generation" --msgbox "Scan completed! Now generating report. You will be asked to provide an encryption password." 10 70
+
+    clear
+    echo "Generating MESA-TOOLKIT report..."
+    echo "Project: $PROJECT_NAME"
+    echo "Customer: $CUSTOMER_NAME ($CUSTOMER_INITIALS)"
+    echo "================================="
+
+    bash -c "source /opt/MESA-venv/bin/activate && cd /root/scans && MESA-Toolkit -o report_generator -p '$PROJECT_NAME' -cn '$CUSTOMER_NAME' -ci '$CUSTOMER_INITIALS'"
+
+    echo "================================="
+    echo "Report generation completed!"
+    read -p "Press Enter to continue..."
+}
+
+# Function to create encrypted zip
+create_encrypted_zip() {
+    clear
+    echo "Creating encrypted ZIP archive..."
+    echo "Please enter a password for the encrypted archive:"
+
+    zip -r -e /root/report/mesa_report.zip /root/scans/*
+
+    echo "Encrypted ZIP archive created: /root/report/mesa_report.zip"
+    read -p "Press Enter to continue..."
+}
+
+# Function to share report via webserver
+share_report() {
+    local server_ip=$(ip route get 8.8.8.8 | awk -F"src " 'NR==1{split($2,a," ");print a[1]}')
+
+    whiptail --title "Report Sharing" --msgbox "Report will be available via webserver at http://$server_ip/ for 2 minutes after you press Enter." 10 70
+
+    clear
+    echo "Starting webserver on http://$server_ip/"
+    echo "Report will be available for 2 minutes..."
+    echo "Press Ctrl+C to stop early if needed"
+
+    cd /root/report
+    timeout 120 python3 -m http.server 80 2>/dev/null || true
+
+    echo "Webserver stopped."
+    read -p "Press Enter to continue..."
+}
+
+# Function for share command
+share_command() {
+    if [ ! -f "/root/report/mesa_report.zip" ]; then
+        whiptail --title "No Report Found" --msgbox "No report found. Please run a scan first." 8 50
+        return
+    fi
+
+    share_report
+}
+
+# Main menu function
+main_menu() {
+    while true; do
+        local choice=$(whiptail --title "MESA-TOOLKIT Security Assessment" --menu "Choose an option:" 15 70 5 \
+            "1" "Start New Assessment" \
+            "2" "Share Existing Report" \
+            "3" "Exit" 3>&1 1>&2 2>&3)
+
+        case $choice in
+            1)
+                run_assessment
+                ;;
+            2)
+                share_command
+                ;;
+            3)
+                exit 0
+                ;;
+            *)
+                exit 0
+                ;;
+        esac
+    done
+}
+
+# Main assessment function
+run_assessment() {
+    verify_network
+    warn_data_removal
+    cleanup_directories
+    get_project_name
+    get_customer_name
+    get_customer_initials
+    get_target_network
+    get_excluded_ips
+    save_config_files
+    display_confirmation
+    run_mesa_scan
+    generate_report
+    create_encrypted_zip
+    share_report
+}
+
+# Check if running as root
+if [ "$EUID" -ne 0 ]; then
+    echo "This script must be run as root"
+    exit 1
+fi
+
+# Check if whiptail is installed
+if ! command -v whiptail &> /dev/null; then
+    echo "whiptail is required but not installed. Please install it first."
+    exit 1
+fi
+
+# Handle command line arguments
+case "${1:-}" in
+    "share")
+        share_command
+        ;;
+    *)
+        main_menu
+        ;;
+esac
