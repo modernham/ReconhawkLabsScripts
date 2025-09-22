@@ -303,6 +303,22 @@ create_encrypted_report() {
 share_report() {
     local ip=$(ip route get 8.8.8.8 2>/dev/null | awk '{print $7; exit}')
 
+    whiptail --title "Report Sharing" --msgbox "Creating new encrypted report with all scan files.\n\nYou will be prompted for a password to encrypt the report." 8 60
+
+    log_message "Starting report sharing - creating new encrypted archive"
+
+    clear
+    echo "Creating new encrypted report archive with all scan files..."
+    echo "You will be prompted for a password:"
+
+    # Remove any existing report files
+    rm -f /root/report/nmap_report.zip
+
+    # Create new encrypted zip with all files from /root/scans
+    zip -r -e /root/report/nmap_report.zip /root/scans/*
+
+    log_message "New encrypted report created for sharing"
+
     whiptail --title "Report Sharing" --msgbox "The report will be shared via webserver at:\nhttp://$ip:8000\n\nPress Enter to start the web server for 2 minutes." 10 60
 
     log_message "Starting web server for report sharing"
@@ -321,8 +337,44 @@ scan_complete_menu() {
     whiptail --title "Scan Complete" --msgbox "Network security assessment scan is complete!\n\nThe scan results are ready to share." 8 60
 }
 
+show_main_menu() {
+    local choice=$(whiptail --title "$BACKTITLE" --menu "Welcome to the Network Security Assessment Tool\n\nChoose an option:" 15 70 3 \
+        "1" "Start New Assessment" \
+        "2" "Share Previous Report" \
+        "3" "Exit" 3>&1 1>&2 2>&3)
+
+    case $choice in
+        1)
+            log_message "User selected: Start New Assessment"
+            return 0
+            ;;
+        2)
+            log_message "User selected: Share Previous Report"
+            if [[ -d "/root/scans" && "$(ls -A /root/scans 2>/dev/null)" ]]; then
+                share_report
+                exit 0
+            else
+                whiptail --title "No Previous Scans" --msgbox "No previous scan data found in /root/scans.\n\nPlease run a new assessment first." 8 60
+                show_main_menu
+            fi
+            ;;
+        3)
+            log_message "User selected: Exit"
+            whiptail --title "Exit" --msgbox "Exiting Network Security Assessment Tool." 8 50
+            exit 0
+            ;;
+        *)
+            log_message "User cancelled or invalid selection"
+            whiptail --title "Exit" --msgbox "Exiting Network Security Assessment Tool." 8 50
+            exit 0
+            ;;
+    esac
+}
+
 main() {
     log_message "Network Security Assessment Tool started"
+
+    show_main_menu
 
     show_network_info
 
