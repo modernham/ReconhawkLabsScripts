@@ -272,7 +272,7 @@ run_deep_scan() {
     echo "Starting comprehensive port and vulnerability scan..."
     echo "This will take a significant amount of time..."
 
-    nmap -sS -sU -p T:1-65535,U:53,161,137,5353 -T3 --max-retries 3 --host-timeout 3600s --script "default,vuln and safe,auth" --script-timeout 900s -Pn -sV -O -iL /root/scans/nmap-live-hosts.txt -oA /root/scans/nmap-deep-scan
+    nmap -sS -sU -p T:1-65535,U:53,161,137,5353 -T3 --max-retries 7 --host-timeout 3600s --script "default,vuln and safe,auth" --script-timeout 300s -Pn -sV -O -iL /root/scans/nmap-live-hosts.txt -oA /root/scans/nmap-deep-scan
 
     log_message "Deep scan completed"
 }
