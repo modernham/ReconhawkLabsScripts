@@ -4,6 +4,7 @@ set -e
 
 BACKTITLE="Network Security Assessment Tool"
 LOGFILE="/tmp/network_assessment.log"
+NETWORK_NAME=""
 
 log_message() {
     echo "$(date '+%Y-%m-%d %H:%M:%S') - $1" >> "$LOGFILE"
@@ -55,6 +56,38 @@ validate_ip() {
     else
         return 1
     fi
+}
+
+validate_network_name() {
+    local name="$1"
+    # Check for lowercase letters, numbers, and hyphens only (no spaces or special chars)
+    if [[ $name =~ ^[a-z0-9-]+$ ]] && [[ ${#name} -ge 3 ]] && [[ ${#name} -le 20 ]]; then
+        return 0
+    else
+        return 1
+    fi
+}
+
+get_network_name() {
+    local network_name=""
+
+    while true; do
+        network_name=$(whiptail --title "Network Name" --inputbox "Enter a name for this network scan:\n\nRequirements:\n- 3-20 characters\n- Lowercase letters, numbers, and hyphens only\n- No spaces or special characters\n\nExample: corp-network, lab-env, prod-dmz" 15 60 3>&1 1>&2 2>&3)
+
+        if [[ $? -ne 0 ]]; then
+            exit 1
+        fi
+
+        # Convert to lowercase
+        network_name=$(echo "$network_name" | tr '[:upper:]' '[:lower:]')
+
+        if validate_network_name "$network_name"; then
+            echo "$network_name"
+            return 0
+        else
+            whiptail --title "Invalid Network Name" --msgbox "Invalid network name format.\n\nRequirements:\n- 3-20 characters\n- Lowercase letters, numbers, and hyphens only\n- No spaces or special characters\n\nPlease try again." 12 60
+        fi
+    done
 }
 
 show_network_info() {
@@ -138,7 +171,7 @@ collect_ip_addresses() {
         fi
     done
 
-    echo -e "$ip_list" | grep -v '^$' > /root/scans/nmap-live-hosts.txt
+    echo -e "$ip_list" | grep -v '^$' > /root/scans/nmap-${NETWORK_NAME}-live-hosts.txt
 }
 
 run_discovery_scan() {
@@ -152,9 +185,9 @@ run_discovery_scan() {
     echo "Running nmap discovery scan on $network_range..."
     echo "This may take 10-20 minutes..."
 
-    nmap -sn -PR -PS21,22,23,25,110,143,80,445,139,8081,389,636,8080,443,3389,5985 -PU53,123,161,137,5353,1900 --max-retries 3 --host-timeout 60s -T2 "$network_range" -oG /root/scans/discovery.gnmap
+    nmap -sn -PR -PS21,22,23,25,110,143,80,445,139,8081,389,636,8080,443,3389,5985 -PU53,123,161,137,5353,1900 --max-retries 3 --host-timeout 60s -T2 "$network_range" -oG /root/scans/nmap-${NETWORK_NAME}-discovery.gnmap
 
-    awk '/Up$/{print $2}' /root/scans/discovery.gnmap > /root/scans/nmap-live-hosts.txt
+    awk '/Up$/{print $2}' /root/scans/nmap-${NETWORK_NAME}-discovery.gnmap > /root/scans/nmap-${NETWORK_NAME}-live-hosts.txt
 
     log_message "Nmap discovery scan completed"
 
@@ -162,14 +195,14 @@ run_discovery_scan() {
     log_message "Starting netdiscover scan"
 
     cd /root/scans
-    timeout 300 netdiscover -P -N > /root/scans/netdiscover-hosts.raw 2>/dev/null || true
+    timeout 300 netdiscover -P -N > /root/scans/nmap-${NETWORK_NAME}-netdiscover.raw 2>/dev/null || true
 
-    if [[ -f /root/scans/netdiscover-hosts.raw ]]; then
-        awk '{print $1}' /root/scans/netdiscover-hosts.raw | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' > /root/scans/netdiscover-hosts.txt
+    if [[ -f /root/scans/nmap-${NETWORK_NAME}-netdiscover.raw ]]; then
+        awk '{print $1}' /root/scans/nmap-${NETWORK_NAME}-netdiscover.raw | grep -E '^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$' > /root/scans/nmap-${NETWORK_NAME}-netdiscover-hosts.txt
 
-        if [[ -s /root/scans/netdiscover-hosts.txt ]]; then
-            cat /root/scans/nmap-live-hosts.txt /root/scans/netdiscover-hosts.txt | sort -u > /root/scans/merged-hosts.txt
-            mv /root/scans/merged-hosts.txt /root/scans/nmap-live-hosts.txt
+        if [[ -s /root/scans/nmap-${NETWORK_NAME}-netdiscover-hosts.txt ]]; then
+            cat /root/scans/nmap-${NETWORK_NAME}-live-hosts.txt /root/scans/nmap-${NETWORK_NAME}-netdiscover-hosts.txt | sort -u > /root/scans/nmap-${NETWORK_NAME}-merged-hosts.txt
+            mv /root/scans/nmap-${NETWORK_NAME}-merged-hosts.txt /root/scans/nmap-${NETWORK_NAME}-live-hosts.txt
             log_message "Netdiscover results merged with nmap results"
         else
             log_message "No valid IPs found in netdiscover output"
@@ -179,12 +212,28 @@ run_discovery_scan() {
     fi
 
     log_message "Discovery scan completed"
+
+    # Show discovered hosts immediately after scan
+    show_discovery_results
+}
+
+show_discovery_results() {
+    local host_list=$(cat /root/scans/nmap-${NETWORK_NAME}-live-hosts.txt 2>/dev/null || echo "")
+    local host_count=$(wc -l < /root/scans/nmap-${NETWORK_NAME}-live-hosts.txt 2>/dev/null || echo "0")
+
+    log_message "Displaying discovery results: $host_count hosts found"
+
+    if [[ $host_count -eq 0 ]]; then
+        whiptail --title "Discovery Complete - No Hosts Found" --msgbox "Discovery scan completed but no live hosts were found.\n\nThis could mean:\n- The network range has no active hosts\n- Hosts are not responding to ping/discovery probes\n- Network connectivity issues\n\nYou can manually add IP addresses in the next step." 12 70
+    else
+        whiptail --title "Discovery Complete - $host_count Hosts Found" --msgbox "Discovery scan completed successfully!\n\nFound $host_count live hosts:\n\n$host_list\n\nYou will be able to modify this list in the next step if needed." 20 70 --scrolltext
+    fi
 }
 
 modify_host_list() {
     while true; do
-        local host_list=$(cat /root/scans/nmap-live-hosts.txt)
-        local host_count=$(wc -l < /root/scans/nmap-live-hosts.txt)
+        local host_list=$(cat /root/scans/nmap-${NETWORK_NAME}-live-hosts.txt)
+        local host_count=$(wc -l < /root/scans/nmap-${NETWORK_NAME}-live-hosts.txt)
 
         if [[ $host_count -eq 0 ]]; then
             whiptail --title "No Hosts" --msgbox "No hosts in the list. Please add at least one host." 8 50
@@ -202,8 +251,8 @@ modify_host_list() {
                 local new_ip=$(whiptail --title "Add IP Address" --inputbox "Enter IP address to add:" 8 50 3>&1 1>&2 2>&3)
                 if [[ $? -eq 0 && -n "$new_ip" ]]; then
                     if validate_ip "$new_ip"; then
-                        if ! grep -q "^$new_ip$" /root/scans/nmap-live-hosts.txt; then
-                            echo "$new_ip" >> /root/scans/nmap-live-hosts.txt
+                        if ! grep -q "^$new_ip$" /root/scans/nmap-${NETWORK_NAME}-live-hosts.txt; then
+                            echo "$new_ip" >> /root/scans/nmap-${NETWORK_NAME}-live-hosts.txt
                             log_message "User added IP: $new_ip"
                             whiptail --title "Success" --msgbox "IP address $new_ip added to the list." 8 50
                         else
@@ -222,9 +271,9 @@ modify_host_list() {
 
                 local ip_to_remove=$(whiptail --title "Remove IP Address" --inputbox "Enter IP address to remove:" 8 50 3>&1 1>&2 2>&3)
                 if [[ $? -eq 0 && -n "$ip_to_remove" ]]; then
-                    if grep -q "^$ip_to_remove$" /root/scans/nmap-live-hosts.txt; then
-                        grep -v "^$ip_to_remove$" /root/scans/nmap-live-hosts.txt > /root/scans/nmap-live-hosts.tmp
-                        mv /root/scans/nmap-live-hosts.tmp /root/scans/nmap-live-hosts.txt
+                    if grep -q "^$ip_to_remove$" /root/scans/nmap-${NETWORK_NAME}-live-hosts.txt; then
+                        grep -v "^$ip_to_remove$" /root/scans/nmap-${NETWORK_NAME}-live-hosts.txt > /root/scans/nmap-${NETWORK_NAME}-live-hosts.tmp
+                        mv /root/scans/nmap-${NETWORK_NAME}-live-hosts.tmp /root/scans/nmap-${NETWORK_NAME}-live-hosts.txt
                         log_message "User removed IP: $ip_to_remove"
                         whiptail --title "Success" --msgbox "IP address $ip_to_remove removed from the list." 8 50
                     else
@@ -250,15 +299,21 @@ modify_host_list() {
 }
 
 display_and_confirm_hosts() {
-    local host_list=$(cat /root/scans/nmap-live-hosts.txt)
-    local host_count=$(wc -l < /root/scans/nmap-live-hosts.txt)
+    local host_list=$(cat /root/scans/nmap-${NETWORK_NAME}-live-hosts.txt)
+    local host_count=$(wc -l < /root/scans/nmap-${NETWORK_NAME}-live-hosts.txt)
 
     if [[ $host_count -eq 0 ]]; then
-        whiptail --title "No Hosts Found" --msgbox "No live hosts were found. Exiting script." 8 50
-        exit 1
+        whiptail --title "No Hosts Found" --msgbox "No live hosts were found.\n\nYou can manually add IP addresses using the modification option." 8 60
+        # Force user to add at least one host
+        modify_host_list
+        return
     fi
 
-    if whiptail --title "Live Hosts ($host_count found)" --yesno "Found the following live hosts:\n\n$host_list\n\nWould you like to modify this list before proceeding?" 20 60 --scrolltext; then
+    # Always show the current host list first
+    whiptail --title "Current Host List - $host_count Hosts" --msgbox "Current hosts that will be scanned:\n\n$host_list\n\nPress OK to continue..." 20 70 --scrolltext
+
+    # Then ask if they want to modify
+    if whiptail --title "Modify Host List?" --yesno "Would you like to modify this list?\n\nSelect 'Yes' to add/remove hosts\nSelect 'No' to proceed with current list" 10 60; then
         modify_host_list
     fi
 
@@ -272,7 +327,7 @@ run_deep_scan() {
     echo "Starting comprehensive port and vulnerability scan..."
     echo "This will take a significant amount of time..."
 
-    nmap -sS -sU -p T:1-65535,U:53,161,137,5353 -T3 --max-retries 7 --host-timeout 3600s --script "default,vuln and safe,auth" --script-timeout 300s -Pn -sV -O -iL /root/scans/nmap-live-hosts.txt -oA /root/scans/nmap-deep-scan
+    nmap -sS -sU -p T:1-65535,U:53,161,137,5353 -T3 --max-retries 7 --host-timeout 3600s --script "default,vuln and safe,auth" --script-timeout 300s -Pn -sV -O -iL /root/scans/nmap-${NETWORK_NAME}-live-hosts.txt -oA /root/scans/nmap-${NETWORK_NAME}-deep-scan
 
     log_message "Deep scan completed"
 }
@@ -280,8 +335,8 @@ run_deep_scan() {
 generate_html_report() {
     log_message "Generating HTML report"
 
-    if [[ -f /root/scans/nmap-deep-scan.xml ]]; then
-        xsltproc /root/scans/nmap-deep-scan.xml -o /root/scans/nmap-deep-scan.html
+    if [[ -f /root/scans/nmap-${NETWORK_NAME}-deep-scan.xml ]]; then
+        xsltproc /root/scans/nmap-${NETWORK_NAME}-deep-scan.xml -o /root/scans/nmap-${NETWORK_NAME}-deep-scan.html
     else
         whiptail --title "Error" --msgbox "XML scan results not found. Cannot generate HTML report." 8 50
         exit 1
@@ -295,7 +350,7 @@ create_encrypted_report() {
     echo "Creating encrypted report archive..."
     echo "You will be prompted for a password:"
 
-    zip -r -e /root/report/nmap_report.zip /root/scans/*
+    zip -r -e /root/report/nmap-${NETWORK_NAME}-report.zip /root/scans/*
 
     log_message "Encrypted report created"
 }
@@ -312,10 +367,10 @@ share_report() {
     echo "You will be prompted for a password:"
 
     # Remove any existing report files
-    rm -f /root/report/nmap_report.zip
+    rm -f /root/report/nmap-*-report.zip
 
     # Create new encrypted zip with all files from /root/scans
-    zip -r -e /root/report/nmap_report.zip /root/scans/*
+    zip -r -e /root/report/nmap-${NETWORK_NAME}-report.zip /root/scans/*
 
     log_message "New encrypted report created for sharing"
 
@@ -377,6 +432,10 @@ main() {
     show_main_menu
 
     show_network_info
+
+    # Get network name for file naming
+    NETWORK_NAME=$(get_network_name)
+    log_message "Network name set to: $NETWORK_NAME"
 
     warn_about_cleanup
 
