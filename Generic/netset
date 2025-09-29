@@ -118,6 +118,11 @@ source /etc/network/interfaces.d/*
 auto lo
 iface lo inet loopback
 allow-hotplug $ETH_ADAPTER
+
+allow-hotplug ens19
+iface eth1 inet static
+    address 192.168.99.3
+    netmask 255.255.255.0
 EOF
 
 if [[ "$MODE" == "dhcp" ]]; then
@@ -131,6 +136,11 @@ $( [ -n "$IP_ADDR" ] && echo "    address $IP_ADDR" )
 $( [ -n "$GATEWAY" ] && echo "    gateway $GATEWAY" )
 $( [ -n "$DNS" ] && echo "    dns-nameservers $DNS" )
     dns-search reconhawklabs.com
+
+allow-hotplug ens19
+iface eth1 inet static
+    address 192.168.99.3
+    netmask 255.255.255.0
 EOF
 fi
 
