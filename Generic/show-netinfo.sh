@@ -45,6 +45,13 @@ tty_to_print="/dev/tty1"          # physical console to print to
   echo "---------------------------------------"
   echo "Commands:"
   echo " Set Static IP or DHCP: netset"
+  echo " Condcut nmap scan: nmap-scan"
+  echo " Condcut mesa scan: mesa-scan"
+  echo " Share exisitign report: share"
+  echo "---------------------------------------"
+  echo "---------------------------------------"
+  echo "Services:"
+  echo " OpenVAS WebUI http://192.168.99.3:9392"
   echo "---------------------------------------"
 } > "$outfile"
 

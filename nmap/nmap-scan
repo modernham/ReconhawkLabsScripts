@@ -374,12 +374,12 @@ share_report() {
 
     log_message "New encrypted report created for sharing"
 
-    whiptail --title "Report Sharing" --msgbox "The report will be shared via webserver at:\nhttp://$ip:8000\n\nPress Enter to start the web server for 2 minutes." 10 60
+    whiptail --title "Report Sharing" --msgbox "The report will be shared via webserver at:\nhttp://192.168.99.3:8000\n\nPress Enter to start the web server for 2 minutes." 10 60
 
     log_message "Starting web server for report sharing"
 
     clear
-    echo "Starting web server at http://$ip:8000"
+    echo "Starting web server at http://192.168.99.3:8000"
     echo "Press Ctrl+C to stop the server"
 
     cd /root/report
