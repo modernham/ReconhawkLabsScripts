@@ -185,7 +185,7 @@ run_discovery_scan() {
     echo "Running nmap discovery scan on $network_range..."
     echo "This may take 10-20 minutes..."
 
-    nmap -sn -PR -PS21,22,23,25,110,143,80,445,139,8081,389,636,8080,443,3389,5985 -PU53,123,161,137,5353,1900 --max-retries 3 --host-timeout 60s -T2 "$network_range" -oG /root/scans/nmap-${NETWORK_NAME}-discovery.gnmap
+    nmap -sn -PR -PS21,22,23,25,110,143,80,445,139,8081,389,636,8080,443,3389,5985 -PU53,123,161,137,5353,1900 --max-retries 10 --host-timeout 60s -T3 "$network_range" -oG /root/scans/nmap-${NETWORK_NAME}-discovery.gnmap
 
     awk '/Up$/{print $2}' /root/scans/nmap-${NETWORK_NAME}-discovery.gnmap > /root/scans/nmap-${NETWORK_NAME}-live-hosts.txt
 
