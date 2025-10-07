@@ -12,6 +12,20 @@ detect_wifi_interface() {
     ip link show | grep -E '^[0-9]+: w' | grep -v '@' | head -1 | cut -d':' -f2 | tr -d ' '
 }
 
+get_configured_ethernet_interface() {
+    local file="$1"
+    # Look for ethernet interface patterns: en*, eth*, em*, eno*, enp*, ens*
+    grep -oE '(auto|iface|allow-hotplug)\s+(e[nmt][pso]?[0-9a-z]+|eth[0-9]+)' "$file" | \
+    awk '{print $2}' | sort -u | head -1
+}
+
+get_configured_wifi_interface() {
+    local file="$1"
+    # Look for wifi interface patterns: wl*, wlan*
+    grep -oE '(auto|iface|allow-hotplug)\s+(wl[a-z0-9]+|wlan[0-9]+)' "$file" | \
+    awk '{print $2}' | sort -u | head -1
+}
+
 update_interfaces_file() {
     local current_eth=$(detect_ethernet_interface)
     local current_wifi=$(detect_wifi_interface)
@@ -35,27 +49,66 @@ update_interfaces_file() {
         return 1
     fi
 
+    # Get currently configured interfaces from the file
+    local configured_eth=$(get_configured_ethernet_interface "$INTERFACES_FILE")
+    local configured_wifi=$(get_configured_wifi_interface "$INTERFACES_FILE")
+
+    echo "Configured ethernet interface in file: ${configured_eth:-none}"
+    echo "Configured wifi interface in file: ${configured_wifi:-none}"
+
+    # Create backup
     sudo cp "$INTERFACES_FILE" "$INTERFACES_FILE.backup"
 
-    sudo sed -i "s/enp0s31f6/$current_eth/g" "$INTERFACES_FILE"
-    sudo sed -i "s/wlp4s0/$current_wifi/g" "$INTERFACES_FILE"
+    # Replace ethernet interface if found and different
+    if [ -n "$configured_eth" ] && [ "$configured_eth" != "$current_eth" ]; then
+        sudo sed -i "s/\b$configured_eth\b/$current_eth/g" "$INTERFACES_FILE"
+        echo "Replaced $configured_eth with $current_eth in interfaces file"
+    elif [ "$configured_eth" = "$current_eth" ]; then
+        echo "Ethernet interface already correctly configured"
+    fi
 
+    # Replace wifi interface if found and different
+    if [ -n "$configured_wifi" ] && [ "$configured_wifi" != "$current_wifi" ]; then
+        sudo sed -i "s/\b$configured_wifi\b/$current_wifi/g" "$INTERFACES_FILE"
+        echo "Replaced $configured_wifi with $current_wifi in interfaces file"
+    elif [ "$configured_wifi" = "$current_wifi" ]; then
+        echo "Wifi interface already correctly configured"
+    fi
+
+    # Update wpa_supplicant service file
     if [ -f "$WPA_SUPPLICANT_SERVICE" ]; then
+        local configured_wifi_service=$(get_configured_wifi_interface "$WPA_SUPPLICANT_SERVICE")
+        echo "Configured wifi interface in wpa_supplicant service: ${configured_wifi_service:-none}"
+        
         sudo cp "$WPA_SUPPLICANT_SERVICE" "$WPA_SUPPLICANT_SERVICE.backup"
-        sudo sed -i "s/wlp4s0/$current_wifi/g" "$WPA_SUPPLICANT_SERVICE"
-        echo "Updated wpa_supplicant service file with current wifi adapter"
+        
+        if [ -n "$configured_wifi_service" ] && [ "$configured_wifi_service" != "$current_wifi" ]; then
+            sudo sed -i "s/\b$configured_wifi_service\b/$current_wifi/g" "$WPA_SUPPLICANT_SERVICE"
+            echo "Updated wpa_supplicant service file: replaced $configured_wifi_service with $current_wifi"
+            service_files_updated=true
+        elif [ "$configured_wifi_service" = "$current_wifi" ]; then
+            echo "wpa_supplicant service already correctly configured"
+        fi
         echo "Backup saved as $WPA_SUPPLICANT_SERVICE.backup"
-        service_files_updated=true
     else
         echo "Warning: wpa_supplicant service file not found at $WPA_SUPPLICANT_SERVICE"
     fi
 
+    # Update dhclient service file
     if [ -f "$DHCLIENT_SERVICE" ]; then
+        local configured_wifi_dhclient=$(get_configured_wifi_interface "$DHCLIENT_SERVICE")
+        echo "Configured wifi interface in dhclient service: ${configured_wifi_dhclient:-none}"
+        
         sudo cp "$DHCLIENT_SERVICE" "$DHCLIENT_SERVICE.backup"
-        sudo sed -i "s/wlp4s0/$current_wifi/g" "$DHCLIENT_SERVICE"
-        echo "Updated dhclient service file with current wifi adapter"
+        
+        if [ -n "$configured_wifi_dhclient" ] && [ "$configured_wifi_dhclient" != "$current_wifi" ]; then
+            sudo sed -i "s/\b$configured_wifi_dhclient\b/$current_wifi/g" "$DHCLIENT_SERVICE"
+            echo "Updated dhclient service file: replaced $configured_wifi_dhclient with $current_wifi"
+            service_files_updated=true
+        elif [ "$configured_wifi_dhclient" = "$current_wifi" ]; then
+            echo "dhclient service already correctly configured"
+        fi
         echo "Backup saved as $DHCLIENT_SERVICE.backup"
-        service_files_updated=true
     else
         echo "Warning: dhclient service file not found at $DHCLIENT_SERVICE"
     fi
@@ -66,7 +119,7 @@ update_interfaces_file() {
         echo "Systemd daemon reloaded successfully"
     fi
 
-    echo "Updated interfaces file with current adapters"
+    echo "Interfaces file update complete"
     echo "Backup saved as $INTERFACES_FILE.backup"
 }
 
