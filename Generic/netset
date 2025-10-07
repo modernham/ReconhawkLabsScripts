@@ -220,13 +220,32 @@ $( [ -n "$DNS" ] && echo "nameserver $DNS" )
 nameserver 8.8.8.8
 search .
 EOF
-    echo "Updated /etc/resolv.conf"
+    echo "Updated /etc/resolv.conf for static IP"
 fi
 
 # Restart networking
 whiptail --title "Networking" --infobox "Restarting networking service..." 8 50
 systemctl restart networking
 sleep 10
+
+# Update resolv.conf for DHCP mode after network restart
+if [[ "$MODE" == "dhcp" ]]; then
+    # Backup current resolv.conf
+    if [ -f "/etc/resolv.conf" ]; then
+        cp /etc/resolv.conf "/etc/resolv.conf.bak.$(date +%s)"
+    fi
+    
+    # Extract DNS server provided by DHCP (first nameserver entry)
+    DHCP_DNS=$(grep "^nameserver" /etc/resolv.conf | head -1 | awk '{print $2}')
+    
+    # Write new resolv.conf with DHCP DNS and 8.8.8.8 backup
+    cat <<EOF > /etc/resolv.conf
+$( [ -n "$DHCP_DNS" ] && echo "nameserver $DHCP_DNS" )
+nameserver 8.8.8.8
+search .
+EOF
+    echo "Updated /etc/resolv.conf for DHCP"
+fi
 
 # Test connectivity
 RESULTS=""
