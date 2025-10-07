@@ -1,0 +1,78 @@
+#!/bin/bash
+# Greenbone Feed Sync Script
+# Runs feed sync commands sequentially and displays completion status
+# Place in /usr/local/bin/
+
+set -o pipefail
+
+# Function to run command and check status
+run_sync() {
+    local description="$1"
+    local command="$2"
+    
+    echo "========================================="
+    echo "Starting: $description"
+    echo "========================================="
+    
+    if eval "$command"; then
+        echo "✅ Completed: $description"
+        return 0
+    else
+        echo "❌ Failed: $description"
+        return 1
+    fi
+}
+
+# Track overall status
+FAILED_COMMANDS=""
+SUCCESS_COUNT=0
+TOTAL_COMMANDS=4
+
+# Run each sync command in order
+echo "Greenbone Feed Synchronization Started"
+echo "This may take several minutes..."
+echo ""
+
+if run_sync "GVMD_DATA Feed Sync" "sudo -u gvm greenbone-feed-sync --type GVMD_DATA"; then
+    ((SUCCESS_COUNT++))
+else
+    FAILED_COMMANDS+="- GVMD_DATA Feed Sync\n"
+fi
+
+echo ""
+
+if run_sync "CERT Feed Sync" "sudo -u gvm greenbone-feed-sync --type CERT"; then
+    ((SUCCESS_COUNT++))
+else
+    FAILED_COMMANDS+="- CERT Feed Sync\n"
+fi
+
+echo ""
+
+if run_sync "SCAP Feed Sync" "sudo -u gvm greenbone-feed-sync --type SCAP"; then
+    ((SUCCESS_COUNT++))
+else
+    FAILED_COMMANDS+="- SCAP Feed Sync\n"
+fi
+
+echo ""
+
+if run_sync "NVT Sync" "sudo -u gvm greenbone-nvt-sync"; then
+    ((SUCCESS_COUNT++))
+else
+    FAILED_COMMANDS+="- NVT Sync\n"
+fi
+
+echo ""
+echo "========================================="
+echo "All synchronization tasks completed"
+echo "========================================="
+
+# Display results in whiptail
+if [ $SUCCESS_COUNT -eq $TOTAL_COMMANDS ]; then
+    whiptail --title "Greenbone Feed Sync Complete" --msgbox "✅ All feed synchronization tasks completed successfully!\n\n$SUCCESS_COUNT of $TOTAL_COMMANDS tasks succeeded." 12 60
+else
+    whiptail --title "Greenbone Feed Sync Complete" --msgbox "⚠️ Feed synchronization completed with errors.\n\n$SUCCESS_COUNT of $TOTAL_COMMANDS tasks succeeded.\n\nFailed tasks:\n$FAILED_COMMANDS" 16 60
+fi
+
+exit 0
