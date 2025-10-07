@@ -1,7 +1,7 @@
 #!/bin/bash
 # Debian Ethernet Configuration Script with whiptail UI and input validation
 # Must be run as root
-#Place in /usr/local/bin/
+# Place in /usr/local/bin/
 
 INTERFACES_FILE="/etc/network/interfaces"
 
@@ -30,7 +30,7 @@ show_network_info() {
     rm -f "$tmpfile"
 }
 
-# IPv4 validation function
+# IPv4 validation function (basic check)
 valid_ip() {
     local ip=$1
     local stat=1
@@ -44,6 +44,34 @@ valid_ip() {
         stat=$?
     fi
     return $stat
+}
+
+# IPv4 with CIDR validation function
+valid_ip_cidr() {
+    local ip_cidr=$1
+    local ip
+    local cidr
+    
+    # Check if CIDR notation is present
+    if [[ ! $ip_cidr =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}/[0-9]{1,2}$ ]]; then
+        return 1
+    fi
+    
+    # Split IP and CIDR
+    ip="${ip_cidr%/*}"
+    cidr="${ip_cidr#*/}"
+    
+    # Validate IP portion
+    if ! valid_ip "$ip"; then
+        return 1
+    fi
+    
+    # Validate CIDR portion (0-32)
+    if [[ $cidr -lt 0 || $cidr -gt 32 ]]; then
+        return 1
+    fi
+    
+    return 0
 }
 
 # Detect adapter
@@ -60,22 +88,39 @@ MODE=$(whiptail --title "Network Mode" --menu "Choose network configuration mode
 "dhcp" "Use DHCP to automatically assign an IP" \
 "static" "Set a static IP address" 3>&1 1>&2 2>&3)
 
+# Check if user cancelled
+if [ $? -ne 0 ]; then
+    echo "Configuration cancelled by user."
+    exit 0
+fi
+
 IP_ADDR=""
 GATEWAY=""
 DNS=""
 
 if [[ "$MODE" == "static" ]]; then
-    # IP input with validation
+    # IP input with validation (full CIDR notation required)
     while true; do
         tmpfile=$(get_network_info)
-        IP_ADDR=$(whiptail --inputbox "Enter static IP (CIDR /24 will be added automatically).\n\n$(cat $tmpfile)" 15 70 3>&1 1>&2 2>&3)
+        IP_ADDR=$(whiptail --inputbox "Enter static IP with CIDR notation (e.g., 10.10.10.1/24).\n\n$(cat $tmpfile)" 16 70 3>&1 1>&2 2>&3)
+        EXIT_CODE=$?
         rm -f "$tmpfile"
-        [ -z "$IP_ADDR" ] && break
-        if valid_ip "$IP_ADDR"; then
-            IP_ADDR="$IP_ADDR/24"
+        
+        # Check if user cancelled
+        if [ $EXIT_CODE -ne 0 ]; then
+            echo "Configuration cancelled by user."
+            exit 0
+        fi
+        
+        if [ -z "$IP_ADDR" ]; then
+            whiptail --msgbox "IP address is required for static configuration." 10 60
+            continue
+        fi
+        
+        if valid_ip_cidr "$IP_ADDR"; then
             break
         else
-            whiptail --msgbox "Invalid IP address format. Please try again." 10 60
+            whiptail --msgbox "Invalid IP address format. Please use CIDR notation (e.g., 192.168.1.100/24)." 10 70
         fi
     done
 
@@ -83,8 +128,17 @@ if [[ "$MODE" == "static" ]]; then
     while true; do
         tmpfile=$(get_network_info)
         GATEWAY=$(whiptail --inputbox "Enter Gateway IP (leave blank to skip).\n\n$(cat $tmpfile)" 15 70 3>&1 1>&2 2>&3)
+        EXIT_CODE=$?
         rm -f "$tmpfile"
+        
+        # Check if user cancelled
+        if [ $EXIT_CODE -ne 0 ]; then
+            echo "Configuration cancelled by user."
+            exit 0
+        fi
+        
         [ -z "$GATEWAY" ] && break
+        
         if valid_ip "$GATEWAY"; then
             break
         else
@@ -96,8 +150,17 @@ if [[ "$MODE" == "static" ]]; then
     while true; do
         tmpfile=$(get_network_info)
         DNS=$(whiptail --inputbox "Enter DNS Server IP (leave blank to skip).\n\n$(cat $tmpfile)" 15 70 3>&1 1>&2 2>&3)
+        EXIT_CODE=$?
         rm -f "$tmpfile"
+        
+        # Check if user cancelled
+        if [ $EXIT_CODE -ne 0 ]; then
+            echo "Configuration cancelled by user."
+            exit 0
+        fi
+        
         [ -z "$DNS" ] && break
+        
         if valid_ip "$DNS"; then
             break
         else
@@ -120,7 +183,7 @@ iface lo inet loopback
 allow-hotplug $ETH_ADAPTER
 
 allow-hotplug ens19
-iface eth1 inet static
+iface ens19 inet static
     address 192.168.99.3
     netmask 255.255.255.0
 EOF
@@ -138,7 +201,7 @@ $( [ -n "$DNS" ] && echo "    dns-nameservers $DNS" )
     dns-search reconhawklabs.com
 
 allow-hotplug ens19
-iface eth1 inet static
+iface ens19 inet static
     address 192.168.99.3
     netmask 255.255.255.0
 EOF
