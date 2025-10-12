@@ -19,6 +19,7 @@ NC='\033[0m' # No Color
 # Configuration
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TEMPLATE_SINGLE="${SCRIPT_DIR}/interfaces_single"
+TEMPLATE_SINGLE_MIRROR="${SCRIPT_DIR}/interfaces_single_mirror"
 TEMPLATE_MIRROR="${SCRIPT_DIR}/interfaces_mirror"
 TARGET_FILE="/etc/network/interfaces"
 BACKUP_DIR="/root/network_backups"
@@ -66,6 +67,11 @@ check_templates() {
 
     if [[ ! -f "$TEMPLATE_SINGLE" ]]; then
         print_error "Template file not found: $TEMPLATE_SINGLE"
+        missing=1
+    fi
+
+    if [[ ! -f "$TEMPLATE_SINGLE_MIRROR" ]]; then
+        print_error "Template file not found: $TEMPLATE_SINGLE_MIRROR"
         missing=1
     fi
 
@@ -247,6 +253,40 @@ configure_single_mode() {
     echo "  - Mirror bridge: mirrorbr (no ports assigned)"
 }
 
+# Configure single interface mirror mode
+configure_single_mirror_mode() {
+    local eth_interface="$1"
+    local temp_file="/tmp/interfaces_${TIMESTAMP}"
+
+    print_warning "Configuring single ethernet mirror mode..."
+    print_warning "WARNING: This configuration dedicates your ONLY ethernet port to Security Onion mirror traffic"
+    print_warning "Regular network connectivity will NOT be available with this configuration!"
+    echo ""
+    print_info "Using interface: $eth_interface"
+
+    # Copy template and replace interface names
+    sed "s/\benp5s0\b/$eth_interface/g" "$TEMPLATE_SINGLE_MIRROR" > "$temp_file"
+
+    # Verify the temp file was created successfully
+    if [[ ! -f "$temp_file" ]]; then
+        print_error "Failed to create temporary configuration file"
+        return 1
+    fi
+
+    # Replace the target file
+    mv "$temp_file" "$TARGET_FILE"
+    chmod 644 "$TARGET_FILE"
+
+    print_success "Configuration completed successfully!"
+    echo ""
+    print_info "Interface configuration summary:"
+    echo "  - Mirror interface: $eth_interface (connected to mirrorbr for Security Onion)"
+    echo "  - LOCAL bridge: 192.168.99.1/24"
+    echo ""
+    print_warning "IMPORTANT: Regular network traffic (internet access) is NOT available in this mode"
+    print_warning "To restore network connectivity, run this script again and select regular single mode"
+}
+
 # Configure mirror mode
 configure_mirror_mode() {
     local primary_interface="$1"
@@ -357,9 +397,50 @@ main() {
 
     # Configure based on number of interfaces
     if [[ ${#eth_interfaces[@]} -eq 1 ]]; then
-        # Single interface mode
-        print_info "Single ethernet interface detected - configuring in single mode"
-        configure_single_mode "${eth_interfaces[0]}"
+        # Single interface mode - prompt user for configuration type
+        print_info "Single ethernet interface detected: ${eth_interfaces[0]}"
+        echo ""
+        echo "========================================"
+        echo -e "${YELLOW}Select configuration mode:${NC}"
+        echo "========================================"
+        echo ""
+        echo "  1) Regular mode (internet access and normal networking)"
+        echo "  2) Mirror mode (Security Onion mirror traffic ONLY - no internet access)"
+        echo ""
+
+        while true; do
+            read -p "Enter your choice (1-2): " mode_choice
+
+            case "$mode_choice" in
+                1)
+                    print_success "Selected: Regular single interface mode"
+                    configure_single_mode "${eth_interfaces[0]}"
+                    break
+                    ;;
+                2)
+                    print_success "Selected: Single interface mirror mode"
+                    echo ""
+                    print_warning "WARNING: This will dedicate your ONLY ethernet port to mirror traffic!"
+                    print_warning "You will NOT have regular network/internet access with this configuration."
+                    echo ""
+                    read -p "Are you sure you want to continue? (yes/no): " confirm_mirror
+
+                    case "${confirm_mirror,,}" in
+                        yes|y)
+                            configure_single_mirror_mode "${eth_interfaces[0]}"
+                            break
+                            ;;
+                        *)
+                            print_info "Cancelled. Returning to mode selection..."
+                            echo ""
+                            ;;
+                    esac
+                    ;;
+                *)
+                    print_error "Invalid selection. Please enter 1 or 2"
+                    ;;
+            esac
+        done
 
     else
         # Multiple interfaces - prompt user
