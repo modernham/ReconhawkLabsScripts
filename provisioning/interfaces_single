@@ -1,0 +1,37 @@
+auto lo
+iface lo inet loopback
+
+auto enp5s0
+iface enp5s0 inet manual
+        ovs_type OVSPort
+        ovs_bridge vmbr0
+        ovs_mtu 9000
+        ovs_options vlan_mode=native-untagged tag=1
+        
+auto vlan1
+iface vlan1 inet dhcp
+        ovs_type OVSIntPort
+        ovs_bridge vmbr0
+        ovs_mtu 1500
+        ovs_options tag=1
+
+auto vmbr0
+iface vmbr0 inet manual
+        ovs_type OVSBridge
+        ovs_ports enp5s0 vlan1
+        ovs_mtu 9000
+
+auto LOCAL
+iface LOCAL inet static
+        address 192.168.99.1/24
+        bridge-ports none
+        bridge-stp off
+        bridge-fd 0
+
+auto mirrorbr
+iface mirrorbr inet manual
+        ovs_type OVSBridge
+        ovs_ports none
+        ovs_mtu 9000
+
+source /etc/network/interfaces.d/*

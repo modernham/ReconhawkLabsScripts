@@ -1,126 +1,418 @@
 #!/bin/bash
 
-INTERFACES_FILE="/etc/network/interfaces"
-WPA_SUPPLICANT_SERVICE="/etc/systemd/system/wpa_supplicant.service"
-DHCLIENT_SERVICE="/etc/systemd/system/dhclient.service"
+################################################################################
+# Network Interface Configuration Script
+# Purpose: Automatically configure network interfaces for single or dual-NIC
+#          systems using OVS bridge configuration templates
+# Usage: sudo ./Configure_Network.sh
+################################################################################
 
-detect_ethernet_interface() {
-    ip link show | grep -E '^[0-9]+: e' | grep -v '@' | head -1 | cut -d':' -f2 | tr -d ' '
+set -e  # Exit on error
+
+# Color codes for output
+RED='\033[0;31m'
+GREEN='\033[0;32m'
+YELLOW='\033[1;33m'
+BLUE='\033[0;34m'
+NC='\033[0m' # No Color
+
+# Configuration
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+TEMPLATE_SINGLE="${SCRIPT_DIR}/interfaces_single"
+TEMPLATE_MIRROR="${SCRIPT_DIR}/interfaces_mirror"
+TARGET_FILE="/etc/network/interfaces"
+BACKUP_DIR="/root/network_backups"
+TIMESTAMP=$(date +%Y%m%d_%H%M%S)
+
+################################################################################
+# Functions
+################################################################################
+
+print_header() {
+    echo -e "${BLUE}============================================${NC}"
+    echo -e "${BLUE}  Network Interface Configuration Script${NC}"
+    echo -e "${BLUE}============================================${NC}"
+    echo ""
 }
 
-detect_wifi_interface() {
-    ip link show | grep -E '^[0-9]+: w' | grep -v '@' | head -1 | cut -d':' -f2 | tr -d ' '
+print_success() {
+    echo -e "${GREEN}[✓]${NC} $1"
 }
 
-get_configured_ethernet_interface() {
-    local file="$1"
-    # Look for ethernet interface patterns: en*, eth*, em*, eno*, enp*, ens*
-    grep -oE '(auto|iface|allow-hotplug)\s+(e[nmt][pso]?[0-9a-z]+|eth[0-9]+)' "$file" | \
-    awk '{print $2}' | sort -u | head -1
+print_error() {
+    echo -e "${RED}[✗]${NC} $1"
 }
 
-get_configured_wifi_interface() {
-    local file="$1"
-    # Look for wifi interface patterns: wl*, wlan*
-    grep -oE '(auto|iface|allow-hotplug)\s+(wl[a-z0-9]+|wlan[0-9]+)' "$file" | \
-    awk '{print $2}' | sort -u | head -1
+print_warning() {
+    echo -e "${YELLOW}[!]${NC} $1"
 }
 
-update_interfaces_file() {
-    local current_eth=$(detect_ethernet_interface)
-    local current_wifi=$(detect_wifi_interface)
-    local service_files_updated=false
+print_info() {
+    echo -e "${BLUE}[i]${NC} $1"
+}
 
-    if [ -z "$current_eth" ]; then
-        echo "Warning: No ethernet interface detected"
-        return 1
+# Check if running as root
+check_root() {
+    if [[ $EUID -ne 0 ]]; then
+        print_error "This script must be run as root or with sudo"
+        echo "Usage: sudo $0"
+        exit 1
+    fi
+}
+
+# Check if template files exist
+check_templates() {
+    local missing=0
+
+    if [[ ! -f "$TEMPLATE_SINGLE" ]]; then
+        print_error "Template file not found: $TEMPLATE_SINGLE"
+        missing=1
     fi
 
-    if [ -z "$current_wifi" ]; then
-        echo "Warning: No wifi interface detected"
-        return 1
+    if [[ ! -f "$TEMPLATE_MIRROR" ]]; then
+        print_error "Template file not found: $TEMPLATE_MIRROR"
+        missing=1
     fi
 
-    echo "Detected ethernet interface: $current_eth"
-    echo "Detected wifi interface: $current_wifi"
-
-    if [ ! -f "$INTERFACES_FILE" ]; then
-        echo "Error: Interfaces file not found at $INTERFACES_FILE"
-        return 1
+    if [[ $missing -eq 1 ]]; then
+        print_error "Required template files are missing. Exiting."
+        exit 1
     fi
 
-    # Get currently configured interfaces from the file
-    local configured_eth=$(get_configured_ethernet_interface "$INTERFACES_FILE")
-    local configured_wifi=$(get_configured_wifi_interface "$INTERFACES_FILE")
+    print_success "Template files found"
+}
 
-    echo "Configured ethernet interface in file: ${configured_eth:-none}"
-    echo "Configured wifi interface in file: ${configured_wifi:-none}"
+# Detect physical ethernet interfaces (excluding virtual, wireless, loopback)
+detect_ethernet_interfaces() {
+    local interfaces=()
 
-    # Create backup
-    sudo cp "$INTERFACES_FILE" "$INTERFACES_FILE.backup"
+    # Get all network interfaces from /sys/class/net
+    for iface in /sys/class/net/*; do
+        iface_name=$(basename "$iface")
 
-    # Replace ethernet interface if found and different
-    if [ -n "$configured_eth" ] && [ "$configured_eth" != "$current_eth" ]; then
-        sudo sed -i "s/\b$configured_eth\b/$current_eth/g" "$INTERFACES_FILE"
-        echo "Replaced $configured_eth with $current_eth in interfaces file"
-    elif [ "$configured_eth" = "$current_eth" ]; then
-        echo "Ethernet interface already correctly configured"
-    fi
+        # Skip loopback
+        [[ "$iface_name" == "lo" ]] && continue
 
-    # Replace wifi interface if found and different
-    if [ -n "$configured_wifi" ] && [ "$configured_wifi" != "$current_wifi" ]; then
-        sudo sed -i "s/\b$configured_wifi\b/$current_wifi/g" "$INTERFACES_FILE"
-        echo "Replaced $configured_wifi with $current_wifi in interfaces file"
-    elif [ "$configured_wifi" = "$current_wifi" ]; then
-        echo "Wifi interface already correctly configured"
-    fi
+        # Skip virtual interfaces (common patterns)
+        [[ "$iface_name" =~ ^(veth|docker|br-|virbr|vmbr|tap|tun|vlan) ]] && continue
 
-    # Update wpa_supplicant service file
-    if [ -f "$WPA_SUPPLICANT_SERVICE" ]; then
-        local configured_wifi_service=$(get_configured_wifi_interface "$WPA_SUPPLICANT_SERVICE")
-        echo "Configured wifi interface in wpa_supplicant service: ${configured_wifi_service:-none}"
-        
-        sudo cp "$WPA_SUPPLICANT_SERVICE" "$WPA_SUPPLICANT_SERVICE.backup"
-        
-        if [ -n "$configured_wifi_service" ] && [ "$configured_wifi_service" != "$current_wifi" ]; then
-            sudo sed -i "s/\b$configured_wifi_service\b/$current_wifi/g" "$WPA_SUPPLICANT_SERVICE"
-            echo "Updated wpa_supplicant service file: replaced $configured_wifi_service with $current_wifi"
-            service_files_updated=true
-        elif [ "$configured_wifi_service" = "$current_wifi" ]; then
-            echo "wpa_supplicant service already correctly configured"
+        # Skip wireless interfaces
+        [[ "$iface_name" =~ ^(wlan|wlp|wl) ]] && continue
+
+        # Check if it's a physical interface by checking for device directory
+        if [[ -d "/sys/class/net/$iface_name/device" ]]; then
+            # Additional check: verify it's ethernet (not wireless)
+            if [[ ! -d "/sys/class/net/$iface_name/wireless" ]] && \
+               [[ ! -d "/sys/class/net/$iface_name/phy80211" ]]; then
+                interfaces+=("$iface_name")
+            fi
         fi
-        echo "Backup saved as $WPA_SUPPLICANT_SERVICE.backup"
-    else
-        echo "Warning: wpa_supplicant service file not found at $WPA_SUPPLICANT_SERVICE"
-    fi
+    done
 
-    # Update dhclient service file
-    if [ -f "$DHCLIENT_SERVICE" ]; then
-        local configured_wifi_dhclient=$(get_configured_wifi_interface "$DHCLIENT_SERVICE")
-        echo "Configured wifi interface in dhclient service: ${configured_wifi_dhclient:-none}"
-        
-        sudo cp "$DHCLIENT_SERVICE" "$DHCLIENT_SERVICE.backup"
-        
-        if [ -n "$configured_wifi_dhclient" ] && [ "$configured_wifi_dhclient" != "$current_wifi" ]; then
-            sudo sed -i "s/\b$configured_wifi_dhclient\b/$current_wifi/g" "$DHCLIENT_SERVICE"
-            echo "Updated dhclient service file: replaced $configured_wifi_dhclient with $current_wifi"
-            service_files_updated=true
-        elif [ "$configured_wifi_dhclient" = "$current_wifi" ]; then
-            echo "dhclient service already correctly configured"
-        fi
-        echo "Backup saved as $DHCLIENT_SERVICE.backup"
-    else
-        echo "Warning: dhclient service file not found at $DHCLIENT_SERVICE"
-    fi
-
-    if [ "$service_files_updated" = true ]; then
-        echo "Reloading systemd daemon due to service file changes..."
-        sudo systemctl daemon-reload
-        echo "Systemd daemon reloaded successfully"
-    fi
-
-    echo "Interfaces file update complete"
-    echo "Backup saved as $INTERFACES_FILE.backup"
+    echo "${interfaces[@]}"
 }
 
-update_interfaces_file
+# Display interfaces with details
+display_interfaces() {
+    local ifaces=("$@")
+    echo ""
+    print_info "Detected ethernet interfaces:"
+    echo ""
+
+    local idx=1
+    for iface in "${ifaces[@]}"; do
+        # Get MAC address
+        local mac=""
+        if [[ -f "/sys/class/net/$iface/address" ]]; then
+            mac=$(cat "/sys/class/net/$iface/address")
+        fi
+
+        # Get link status
+        local status="DOWN"
+        if [[ -f "/sys/class/net/$iface/operstate" ]]; then
+            local state=$(cat "/sys/class/net/$iface/operstate")
+            [[ "$state" == "up" ]] && status="UP"
+        fi
+
+        # Get driver info
+        local driver=""
+        if [[ -L "/sys/class/net/$iface/device/driver" ]]; then
+            driver=$(basename "$(readlink "/sys/class/net/$iface/device/driver")")
+        fi
+
+        printf "  %d) %-10s  MAC: %-17s  Status: %-4s" "$idx" "$iface" "$mac" "$status"
+        [[ -n "$driver" ]] && printf "  Driver: %s" "$driver"
+        echo ""
+
+        ((idx++))
+    done
+    echo ""
+}
+
+# Prompt user to select an interface
+select_interface() {
+    local ifaces=("$@")
+    local choice
+
+    echo "" >&2
+    echo "Available interfaces:" >&2
+    echo "" >&2
+
+    # Display numbered interface list
+    local idx=1
+    for iface in "${ifaces[@]}"; do
+        # Get MAC address
+        local mac=""
+        if [[ -f "/sys/class/net/$iface/address" ]]; then
+            mac=$(cat "/sys/class/net/$iface/address")
+        fi
+
+        # Get link status
+        local status="DOWN"
+        if [[ -f "/sys/class/net/$iface/operstate" ]]; then
+            local state=$(cat "/sys/class/net/$iface/operstate")
+            [[ "$state" == "up" ]] && status="UP"
+        fi
+
+        # Get driver info
+        local driver=""
+        if [[ -L "/sys/class/net/$iface/device/driver" ]]; then
+            driver=$(basename "$(readlink "/sys/class/net/$iface/device/driver")")
+        fi
+
+        printf "  %d) %-10s  MAC: %-17s  Status: %-4s" "$idx" "$iface" "$mac" "$status" >&2
+        [[ -n "$driver" ]] && printf "  Driver: %s" "$driver" >&2
+        echo "" >&2
+
+        ((idx++))
+    done
+    echo "" >&2
+
+    # Prompt for selection AFTER showing the list
+    while true; do
+        read -p "Enter your choice (1-${#ifaces[@]}): " choice
+
+        # Validate input
+        if [[ "$choice" =~ ^[0-9]+$ ]] && [[ $choice -ge 1 ]] && [[ $choice -le ${#ifaces[@]} ]]; then
+            echo "${ifaces[$((choice-1))]}"
+            return 0
+        else
+            echo -e "${RED}[✗]${NC} Invalid selection. Please enter a number between 1 and ${#ifaces[@]}" >&2
+        fi
+    done
+}
+
+# Backup current interfaces file
+backup_interfaces() {
+    if [[ -f "$TARGET_FILE" ]]; then
+        # Create backup directory if it doesn't exist
+        mkdir -p "$BACKUP_DIR"
+
+        local backup_file="${BACKUP_DIR}/interfaces_${TIMESTAMP}.bak"
+
+        cp "$TARGET_FILE" "$backup_file"
+        print_success "Backed up current interfaces file to: $backup_file"
+    else
+        print_warning "No existing $TARGET_FILE found (fresh installation?)"
+    fi
+}
+
+# Configure single interface mode
+configure_single_mode() {
+    local eth_interface="$1"
+    local temp_file="/tmp/interfaces_${TIMESTAMP}"
+
+    print_info "Configuring single ethernet mode..."
+    print_info "Using interface: $eth_interface"
+
+    # Copy template and replace interface names
+    sed "s/\benp5s0\b/$eth_interface/g" "$TEMPLATE_SINGLE" > "$temp_file"
+
+    # Verify the temp file was created successfully
+    if [[ ! -f "$temp_file" ]]; then
+        print_error "Failed to create temporary configuration file"
+        return 1
+    fi
+
+    # Replace the target file
+    mv "$temp_file" "$TARGET_FILE"
+    chmod 644 "$TARGET_FILE"
+
+    print_success "Configuration completed successfully!"
+    echo ""
+    print_info "Interface configuration summary:"
+    echo "  - Primary interface: $eth_interface (connected to vmbr0)"
+    echo "  - VLAN1: DHCP enabled on vmbr0"
+    echo "  - LOCAL bridge: 192.168.99.1/24"
+    echo "  - Mirror bridge: mirrorbr (no ports assigned)"
+}
+
+# Configure mirror mode
+configure_mirror_mode() {
+    local primary_interface="$1"
+    local mirror_interface="$2"
+    local temp_file="/tmp/interfaces_${TIMESTAMP}"
+
+    print_info "Configuring dual ethernet (mirror) mode..."
+    print_info "Primary interface: $primary_interface"
+    print_info "Mirror interface: $mirror_interface"
+
+    # Copy template and replace interface names
+    sed -e "s/\benp5s0\b/$primary_interface/g" \
+        -e "s/\benp4s0\b/$mirror_interface/g" \
+        "$TEMPLATE_MIRROR" > "$temp_file"
+
+    # Verify the temp file was created successfully
+    if [[ ! -f "$temp_file" ]]; then
+        print_error "Failed to create temporary configuration file"
+        return 1
+    fi
+
+    # Replace the target file
+    mv "$temp_file" "$TARGET_FILE"
+    chmod 644 "$TARGET_FILE"
+
+    print_success "Configuration completed successfully!"
+    echo ""
+    print_info "Interface configuration summary:"
+    echo "  - Primary interface: $primary_interface (connected to vmbr0)"
+    echo "  - Mirror interface: $mirror_interface (connected to mirrorbr for Security Onion)"
+    echo "  - VLAN1: DHCP enabled on vmbr0"
+    echo "  - LOCAL bridge: 192.168.99.1/24"
+}
+
+# Prompt for system restart
+prompt_restart() {
+    echo ""
+    echo -e "${YELLOW}============================================${NC}"
+    print_warning "Network configuration has been updated"
+    print_warning "A system restart is required to apply changes"
+    echo -e "${YELLOW}============================================${NC}"
+    echo ""
+
+    read -p "Would you like to restart now? (yes/no): " restart_choice
+
+    case "${restart_choice,,}" in
+        yes|y)
+            print_info "Restarting system in 5 seconds..."
+            print_info "Press Ctrl+C to cancel"
+            sleep 5
+            reboot
+            ;;
+        *)
+            print_info "Please restart the system manually when ready:"
+            echo "  sudo reboot"
+            ;;
+    esac
+}
+
+# Verify OVS is installed (optional warning)
+check_ovs() {
+    if ! command -v ovs-vsctl &> /dev/null; then
+        print_warning "Open vSwitch (openvswitch-switch) does not appear to be installed"
+        print_warning "The configuration uses OVS bridges and may not work without it"
+        echo ""
+        read -p "Continue anyway? (yes/no): " continue_choice
+        case "${continue_choice,,}" in
+            yes|y)
+                return 0
+                ;;
+            *)
+                print_info "Exiting. Install openvswitch-switch and try again:"
+                echo "  sudo apt-get install openvswitch-switch"
+                exit 0
+                ;;
+        esac
+    fi
+}
+
+################################################################################
+# Main Script
+################################################################################
+
+main() {
+    print_header
+
+    # Perform pre-flight checks
+    check_root
+    check_templates
+    check_ovs
+
+    # Detect ethernet interfaces
+    print_info "Detecting physical ethernet interfaces..."
+    eth_interfaces=($(detect_ethernet_interfaces))
+
+    # Check if any interfaces were found
+    if [[ ${#eth_interfaces[@]} -eq 0 ]]; then
+        print_error "No physical ethernet interfaces detected!"
+        print_error "This script requires at least one ethernet adapter"
+        exit 1
+    fi
+
+    print_success "Found ${#eth_interfaces[@]} ethernet interface(s)"
+    display_interfaces "${eth_interfaces[@]}"
+
+    # Backup current configuration
+    backup_interfaces
+
+    # Configure based on number of interfaces
+    if [[ ${#eth_interfaces[@]} -eq 1 ]]; then
+        # Single interface mode
+        print_info "Single ethernet interface detected - configuring in single mode"
+        configure_single_mode "${eth_interfaces[0]}"
+
+    else
+        # Multiple interfaces - prompt user
+        print_info "Multiple ethernet interfaces detected - configuring in mirror mode"
+        echo ""
+
+        # Display primary selection prompt BEFORE calling function
+        echo "========================================"
+        echo -e "${YELLOW}Select PRIMARY interface (for network connectivity):${NC}"
+        echo "========================================"
+        primary_iface=$(select_interface "${eth_interfaces[@]}")
+        print_success "Selected primary interface: $primary_iface"
+        echo ""
+
+        # Create array of remaining interfaces for mirror selection
+        remaining_ifaces=()
+        for iface in "${eth_interfaces[@]}"; do
+            [[ "$iface" != "$primary_iface" ]] && remaining_ifaces+=("$iface")
+        done
+
+        # Display mirror selection prompt BEFORE calling function
+        echo "========================================"
+        echo -e "${YELLOW}Select MIRROR interface (for Security Onion monitoring):${NC}"
+        echo "========================================"
+        mirror_iface=$(select_interface "${remaining_ifaces[@]}")
+        print_success "Selected mirror interface: $mirror_iface"
+        echo ""
+
+        # Confirm selection
+        echo -e "${YELLOW}Configuration Summary:${NC}"
+        echo "  Primary (network): $primary_iface"
+        echo "  Mirror (Security Onion): $mirror_iface"
+        echo ""
+        read -p "Proceed with this configuration? (yes/no): " confirm
+
+        case "${confirm,,}" in
+            yes|y)
+                configure_mirror_mode "$primary_iface" "$mirror_iface"
+                ;;
+            *)
+                print_info "Configuration cancelled by user"
+                exit 0
+                ;;
+        esac
+    fi
+
+    # Prompt for restart
+    prompt_restart
+
+    print_success "Script completed successfully"
+}
+
+# Run main function
+main
+
+exit 0

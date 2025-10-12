@@ -116,7 +116,7 @@ echo "Starting comprehensive port and vulnerability scan..."
 echo "This will take a significant amount of time..."
 echo ""
 
-nmap -sS -sU -p T:1-65535,U:53,161,137,5353 -T3 --max-retries 7 --host-timeout 3600s --script "default,vuln and safe,auth" --script-timeout 300s -Pn -sV -O -iL "${FILE_PREFIX}-live-hosts.txt" -oA "${FILE_PREFIX}-deep-scan"
+nmap -sS -sU -p T:1-65535,U:53,161,137,5353 -T3 --max-retries 7 --host-timeout 3600s --script "default,vuln and safe,auth" --script-timeout 900s -Pn -sV -O -iL "${FILE_PREFIX}-live-hosts.txt" -oA "${FILE_PREFIX}-deep-scan"
 
 log_message "Deep scan completed"
 
