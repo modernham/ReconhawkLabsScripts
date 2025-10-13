@@ -392,7 +392,7 @@ IMPORTANT:
 
 If only ONE ethernet interface is currently connected to
 the system, you MUST plug in an additional ethernet adapter
-before proceeding.
+to use security onion and internet at the same time before proceeding.
 
 You can use:
   • Built-in secondary ethernet port
