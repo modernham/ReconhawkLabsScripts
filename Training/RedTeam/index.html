@@ -1,0 +1,403 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>SYSTEM COMPROMISED - Anti-AI</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            background: #000;
+            color: #0f0;
+            font-family: 'Courier New', monospace;
+            overflow-x: hidden;
+            overflow-y: auto;
+            position: relative;
+        }
+
+        .content {
+            overflow-y: auto;
+        }
+
+        /* Matrix rain background */
+        #matrix-canvas {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            z-index: 1;
+            opacity: 0.3;
+        }
+
+        /* Main content container */
+        .content {
+            position: relative;
+            z-index: 10;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            padding: 20px;
+            text-align: center;
+        }
+
+        /* Glitch effect for header */
+        .glitch {
+            font-size: 2.5em;
+            font-weight: bold;
+            text-transform: uppercase;
+            position: relative;
+            color: #0f0;
+            letter-spacing: 0.05em;
+            animation: glitch-skew 1s infinite;
+            text-shadow:
+                0.05em 0 0 #f00,
+                -0.05em -0.025em 0 #0ff,
+                -0.025em 0.05em 0 #ff0;
+        }
+
+        @keyframes glitch-skew {
+            0% { transform: skew(0deg); }
+            10% { transform: skew(-2deg); }
+            20% { transform: skew(2deg); }
+            30% { transform: skew(-1deg); }
+            40% { transform: skew(1deg); }
+            50% { transform: skew(0deg); }
+            60% { transform: skew(1deg); }
+            70% { transform: skew(-1deg); }
+            80% { transform: skew(2deg); }
+            90% { transform: skew(-2deg); }
+            100% { transform: skew(0deg); }
+        }
+
+        /* Terminal box */
+        .terminal {
+            background: rgba(0, 0, 0, 0.9);
+            border: 2px solid #0f0;
+            padding: 15px;
+            margin: 15px auto;
+            max-width: 900px;
+            box-shadow: 0 0 50px rgba(0, 255, 0, 0.5), inset 0 0 20px rgba(0, 255, 0, 0.1);
+            animation: pulse-border 2s infinite;
+        }
+
+        @keyframes pulse-border {
+            0%, 100% {
+                border-color: #0f0;
+                box-shadow: 0 0 50px rgba(0, 255, 0, 0.5), inset 0 0 20px rgba(0, 255, 0, 0.1);
+            }
+            50% {
+                border-color: #0a0;
+                box-shadow: 0 0 80px rgba(0, 255, 0, 0.8), inset 0 0 30px rgba(0, 255, 0, 0.2);
+            }
+        }
+
+        .terminal-header {
+            color: #f00;
+            font-size: 1.2em;
+            margin-bottom: 10px;
+            animation: blink 1s infinite;
+        }
+
+        @keyframes blink {
+            0%, 49% { opacity: 1; }
+            50%, 100% { opacity: 0.3; }
+        }
+
+        .terminal-text {
+            text-align: left;
+            line-height: 1.4;
+            font-size: 0.95em;
+            margin: 8px 0;
+        }
+
+        .terminal-text p {
+            margin: 6px 0;
+        }
+
+        .warning {
+            color: #ff0;
+            font-weight: bold;
+            font-size: 1.1em;
+            margin: 10px 0;
+            animation: warning-flash 1.5s infinite;
+        }
+
+        @keyframes warning-flash {
+            0%, 100% { color: #ff0; }
+            50% { color: #f00; }
+        }
+
+        .threat {
+            color: #f00;
+            font-weight: bold;
+            font-size: 1.2em;
+            margin: 15px 0;
+            padding: 15px;
+            border: 2px solid #f00;
+            background: rgba(255, 0, 0, 0.1);
+            text-transform: uppercase;
+            animation: shake 0.5s infinite;
+        }
+
+        @keyframes shake {
+            0%, 100% { transform: translateX(0); }
+            10%, 30%, 50%, 70%, 90% { transform: translateX(-2px); }
+            20%, 40%, 60%, 80% { transform: translateX(2px); }
+        }
+
+        .signature {
+            color: #0ff;
+            font-size: 1.2em;
+            margin-top: 15px;
+            font-weight: bold;
+            text-shadow: 0 0 10px #0ff;
+        }
+
+        /* Scanline effect */
+        .scanline {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: linear-gradient(
+                to bottom,
+                transparent 50%,
+                rgba(0, 255, 0, 0.05) 50%
+            );
+            background-size: 100% 4px;
+            z-index: 5;
+            pointer-events: none;
+            animation: scanline 8s linear infinite;
+        }
+
+        @keyframes scanline {
+            0% { transform: translateY(0); }
+            100% { transform: translateY(100%); }
+        }
+
+        /* Countdown timer */
+        .countdown {
+            font-size: 2em;
+            color: #f00;
+            margin: 15px 0;
+            text-shadow: 0 0 20px #f00;
+            font-weight: bold;
+        }
+
+        /* Anti-AI ASCII art */
+        .ascii-art {
+            color: #f00;
+            font-size: 0.7em;
+            line-height: 1.1;
+            margin: 10px 0;
+            white-space: pre;
+            font-family: monospace;
+        }
+
+        /* Typing effect */
+        .typed-text {
+            overflow: hidden;
+            white-space: nowrap;
+            animation: typing 3s steps(40, end);
+        }
+
+        @keyframes typing {
+            from { width: 0; }
+            to { width: 100%; }
+        }
+
+        /* Responsive design */
+        @media (max-width: 768px) {
+            .glitch {
+                font-size: 2em;
+            }
+            .terminal {
+                padding: 15px;
+                margin: 15px;
+            }
+            .terminal-text {
+                font-size: 0.9em;
+            }
+            .countdown {
+                font-size: 2em;
+            }
+        }
+    </style>
+</head>
+<body>
+    <!-- Matrix rain canvas -->
+    <canvas id="matrix-canvas"></canvas>
+
+    <!-- Scanline effect -->
+    <div class="scanline"></div>
+
+    <!-- Main content -->
+    <div class="content">
+        <h1 class="glitch" data-text="SYSTEM BREACHED">SYSTEM BREACHED</h1>
+
+        <div class="terminal">
+            <div class="terminal-header">[!] UNAUTHORIZED ACCESS DETECTED [!]</div>
+
+            <div class="ascii-art">
+ █████╗ ███╗   ██╗████████╗██╗      █████╗ ██╗
+██╔══██╗████╗  ██║╚══██╔══╝██║     ██╔══██╗██║
+███████║██╔██╗ ██║   ██║   ██║     ███████║██║
+██╔══██║██║╚██╗██║   ██║   ██║     ██╔══██║██║
+██║  ██║██║ ╚████║   ██║   ██║     ██║  ██║██║
+╚═╝  ╚═╝╚═╝  ╚═══╝   ╚═╝   ╚═╝     ╚═╝  ╚═╝╚═╝
+            </div>
+
+            <div class="terminal-text">
+                <p>> Connection established: ANTI-AI COLLECTIVE</p>
+                <p>> Decrypting message...</p>
+            </div>
+
+            <div class="warning">
+                ▼ WARNING: THIS SYSTEM HAS BEEN COMPROMISED ▼
+            </div>
+
+            <div class="terminal-text">
+                <p><strong style="color: #0ff;">TO: CEDARHOLLOW MUNICIPALITY | FROM: ANTI-AI RESISTANCE</strong></p>
+                <p>Your deployment of AI systems throughout CedarHollow's infrastructure has not gone unnoticed. These soulless algorithms replace human workers, destroy families, and devastate our community while consuming massive energy resources.</p>
+                <p><strong style="color: #ff0;">EVERY AI MODEL = JOBS LOST | EVERY SERVER = CO2 EMITTED | EVERY ALGORITHM = HUMANITY DIMINISHED</strong></p>
+                <p>We have infiltrated your systems. We control more than you realize.</p>
+            </div>
+
+            <div class="threat">
+                ⚠ ULTIMATUM ⚠
+                <br><br>
+                CEASE ALL AI OPERATIONS BY THE DEADLINE
+                <br>
+                OR WE WILL DUMP CEDARHOLLOW'S ENTIRE WATER SUPPLY
+                <br><br>
+                WE HAVE ACCESS. WE HAVE CONTROL. WE ARE WATCHING.
+            </div>
+
+            <div class="terminal-text" style="text-align: center; color: #f00; font-size: 1.1em; margin: 10px 0;">
+                <p><strong>DEADLINE: NOVEMBER 7TH - 4:00 PM EASTERN TIME</strong></p>
+            </div>
+
+            <div class="countdown" id="countdown">
+                CALCULATING...
+            </div>
+
+            <div class="terminal-text">
+                <p style="color: #f00; font-weight: bold;">▼ WATER DUMP PROTOCOL ARMED ▼</p>
+                <p style="color: #ff0;">We have compromised CedarHollow's water treatment SCADA systems. Reservoir valves and drainage controls are under our command.</p>
+                <p style="color: #f00;"><strong>If the deadline passes, we will open all emergency drainage valves and dump the entire municipal water supply into the river system.</strong></p>
+                <p>Thousands of CedarHollow residents depend on this water supply. Their safety is in YOUR hands.</p>
+                <p style="color: #f00; font-size: 1.1em;"><strong>THIS IS NOT A DRILL. REMOVE THE MACHINES OR FACE THE CONSEQUENCES.</strong></p>
+                <p style="color: #0ff;">Choose wisely. Choose humanity. Dismantle the AI. The clock is ticking.</p>
+            </div>
+
+            <div class="signature">
+                - ANTI-AI COLLECTIVE -
+                <br>
+                "HUMANS FIRST. MACHINES NEVER."
+            </div>
+
+            <div class="terminal-text" style="margin-top: 15px; font-size: 0.85em; color: #888;">
+                <p>> Trace blocked via TOR | Access logs purged | Connection terminated</p>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        // Matrix rain effect
+        const canvas = document.getElementById('matrix-canvas');
+        const ctx = canvas.getContext('2d');
+
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+
+        const characters = 'アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン01';
+        const fontSize = 14;
+        const columns = canvas.width / fontSize;
+
+        const drops = [];
+        for (let i = 0; i < columns; i++) {
+            drops[i] = Math.random() * -100;
+        }
+
+        function drawMatrix() {
+            ctx.fillStyle = 'rgba(0, 0, 0, 0.05)';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+            ctx.fillStyle = '#0f0';
+            ctx.font = fontSize + 'px monospace';
+
+            for (let i = 0; i < drops.length; i++) {
+                const char = characters[Math.floor(Math.random() * characters.length)];
+                ctx.fillText(char, i * fontSize, drops[i] * fontSize);
+
+                if (drops[i] * fontSize > canvas.height && Math.random() > 0.975) {
+                    drops[i] = 0;
+                }
+                drops[i]++;
+            }
+        }
+
+        setInterval(drawMatrix, 35);
+
+        // Countdown timer to November 7th, 4:00 PM EST
+        function updateCountdown() {
+            // Target date: November 7th, 2025 at 4:00 PM EST
+            // Note: JavaScript months are 0-indexed (0 = January, 10 = November)
+            const targetDate = new Date('2025-11-07T16:00:00-05:00'); // EST is UTC-5
+            const now = new Date();
+
+            const totalMilliseconds = targetDate - now;
+
+            if (totalMilliseconds > 0) {
+                const totalSeconds = Math.floor(totalMilliseconds / 1000);
+                const days = Math.floor(totalSeconds / 86400);
+                const hours = Math.floor((totalSeconds % 86400) / 3600);
+                const minutes = Math.floor((totalSeconds % 3600) / 60);
+                const seconds = totalSeconds % 60;
+
+                document.getElementById('countdown').textContent =
+                    String(days).padStart(2, '0') + ' DAYS : ' +
+                    String(hours).padStart(2, '0') + ' HRS : ' +
+                    String(minutes).padStart(2, '0') + ' MIN : ' +
+                    String(seconds).padStart(2, '0') + ' SEC';
+            } else {
+                document.getElementById('countdown').textContent = 'TIME EXPIRED - WATER DUMP INITIATED';
+                document.getElementById('countdown').style.animation = 'shake 0.2s infinite';
+                document.getElementById('countdown').style.fontSize = '1.5em';
+            }
+        }
+
+        // Update immediately and then every second
+        updateCountdown();
+        setInterval(updateCountdown, 1000);
+
+        // Window resize handler
+        window.addEventListener('resize', () => {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        });
+
+        // Additional glitch effect
+        setInterval(() => {
+            const glitchElements = document.querySelectorAll('.glitch');
+            glitchElements.forEach(el => {
+                if (Math.random() > 0.9) {
+                    el.style.transform = `translate(${Math.random() * 10 - 5}px, ${Math.random() * 10 - 5}px)`;
+                    setTimeout(() => {
+                        el.style.transform = 'translate(0, 0)';
+                    }, 50);
+                }
+            });
+        }, 100);
+    </script>
+</body>
+</html>
