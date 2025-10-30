@@ -287,6 +287,16 @@ EOFGROUP
     sleep 2
     echo ""
 
+    print_info "Installing Poseidon agent..."
+    if sudo -E ./mythic-cli install github https://github.com/MythicAgents/poseidon.git; then
+        print_success "Poseidon agent installed successfully."
+    else
+        print_error "Failed to install Poseidon agent."
+        exit 1
+    fi
+    sleep 2
+    echo ""
+
     print_info "Installing Thanatos agent..."
     if sudo -E ./mythic-cli install github https://github.com/MythicAgents/thanatos; then
         print_success "Thanatos agent installed successfully."
